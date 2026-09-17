@@ -9,19 +9,19 @@
 
 This is a B2B compliance-adjacent product with server-enforced authorization and financial workflow at its core — the honest estimate below assumes a small team building carefully, not a solo weekend build. Effort estimates from `05-features.md` sum to ~87 person-days of feature work alone; the phases below add foundation, integration, and hardening time on top of that, which is where most B2B tools actually lose time.
 
-The marketing site (`addmin-site/`) is already built and self-serve-first — its "Start Free Trial" CTA sends every visitor into `/signup` → onboarding → `/app/subscribe`, not into a sales queue. That means Billing & Subscription (F-19) can no longer wait until a later phase the way a sales-led plan would have allowed; it moves into Phase 1 below, because the marketing site's core promise is broken without it, even before any other module ships.
+The marketing site (`addmin-marketing/`, an Astro site — see `09-marketing-website.md`) ships alongside the app and is self-serve-first — its "Start Free Trial" CTA sends every visitor into `/signup` → onboarding → `/app/subscribe`, not into a sales queue. That means Billing & Subscription (F-19) can no longer wait until a later phase the way a sales-led plan would have allowed; it moves into Phase 1 below, because the marketing site's core promise is broken without it, even before any other module ships.
 
 ## Phase 0 — Foundation (Week 0-2)
 
 Goal: codebase ready, deploy pipeline working, no real users yet.
 
 **Tasks:**
-- Repo setup (Next.js 14 + NestJS API in a monorepo, Prisma schema scaffolded from `04-architecture.md`'s data model)
-- Auth scaffolding (F-01: signup, login, sessions, TOTP MFA)
-- Base RBAC/office-scope enforcement middleware (F-02 skeleton — the gate every later feature must pass through)
+- Repo setup: `wasp new addmin` scaffolds the app (React client + Node/Express server + Prisma schema in one `main.wasp` spec, per `04-architecture.md`); Prisma schema written from `04-architecture.md`'s data model; TailwindCSS + shadcn/ui wired in. Marketing site scaffolded separately with `npm create astro@latest addmin-marketing`.
+- Auth scaffolding (F-01: Wasp full-stack auth for signup/login/sessions/email verification, custom TOTP MFA layered on top)
+- Base RBAC/office-scope enforcement pattern inside Wasp operations (F-02 skeleton — the gate every later feature's `query`/`action` must pass through)
 - Database schema migration for Organization/Office/User/AuditLog (the tables everything else depends on)
-- Deploy to staging (single-region, e.g., Render or AWS ECS + RDS)
-- Error monitoring (Sentry) and basic analytics (PostHog)
+- Deploy to staging with `wasp deploy fly launch` (one command provisions client + server + Postgres on Fly.io); marketing site deployed separately as a static Astro build
+- Error monitoring (Sentry) and basic analytics (Plausible)
 
 **Exit criteria:** A test user can sign up, verify email, enable MFA, log in, and see an empty Office Home for a placeholder office — and a second test user in a different office scope cannot see the first user's data (verified with an automated test, not just manual check).
 
@@ -41,7 +41,7 @@ Goal: prove the core promise end-to-end for one office — a real Admin can onbo
 
 **Tasks broken down:**
 - Week 3: Office hierarchy + onboarding checklist backend (OfficeChecklistTemplate/Item) and wizard frontend shell
-- Week 4: Trial/subscription backend (F-19: `Subscription` state machine, billing-provider adapter) + `/app/subscribe` frontend, wired to the onboarding wizard's exit; the Platform Ops Console (F-20: org list + manual subscription/tenant-status control) ships alongside it since it shares the `Subscription` entity; utility connection setup starts in parallel
+- Week 4: Trial/subscription backend (F-19: `Subscription` state machine, Stripe Checkout + `POST /payments-webhook` route) + `/app/subscribe` frontend, wired to the onboarding wizard's exit; the Platform Ops Console (F-20: org list + manual subscription/tenant-status control) ships alongside it since it shares the `Subscription` entity; utility connection setup starts in parallel
 - Week 5: Recurring Obligation Engine (schedule + instance generation, nightly job) + Missing Bill Alert job + Bill entry/invoice upload + Bill register frontend
 - Week 6: Approval workflow (Maker-Checker routing, authorization limits) + Payment Tracking Mode
 - Week 7: Office Home dashboard (minimal version), internal QA against the full signup-to-payment flow, bug fixing
@@ -49,7 +49,7 @@ Goal: prove the core promise end-to-end for one office — a real Admin can onbo
 **Exit criteria:**
 - A test user can click "Start Free Trial" on the actual marketing site, land in `/signup`, complete guided onboarding for a real office, and reach `/app/subscribe` without support intervention.
 - At least one full obligation cycle (utility bill: expected → entered → approved → paid → closed) completes end-to-end with correct audit trail.
-- At least one test subscription completes trial → paid conversion through the real billing-provider integration (not a stub), verified against the provider's own dashboard.
+- At least one test subscription completes trial → paid conversion through the real Stripe integration (not a stub), verified against the Stripe dashboard.
 - A Platform Operator can log into `/platform`, see that test org in the list, and manually set a second test org's Subscription to "active" and back to "trialing" — with no customer-scoped session able to reach `/platform` at all.
 - 0 P0 bugs in the signup-to-payment path.
 - Unauthorized cross-office access attempts are rejected and logged in 100% of a scripted test suite.
@@ -122,12 +122,12 @@ Goal: grow within the validated wedge before touching anything on the deferred b
 
 ## Decision log (initial 5 decisions)
 
-1. **Chose a modular monolith (NestJS) over microservices** — team size (3 engineers) doesn't justify microservice operational overhead; module boundaries in `04-architecture.md` keep a clean path to splitting out services later if needed.
-2. **Chose Postgres + Prisma over a NoSQL store** — financial/audit data (bills, payments, TDS, audit logs) needs ACID guarantees and relational integrity across Office/Utility/Payment/Audit entities.
+1. **Chose Wasp (a full-stack React/Node/Prisma framework) over a hand-built Next.js + NestJS split** — team size (3 engineers) doesn't justify maintaining a separate frontend app, REST API, and worker service; Wasp compiles one spec into all three, and module boundaries in `04-architecture.md` keep a clean path to extracting a service later if that's ever justified.
+2. **Chose Postgres + Prisma over a NoSQL store** — financial/audit data (bills, payments, TDS, audit logs) needs ACID guarantees and relational integrity across Office/Utility/Payment/Audit entities; Prisma is also Wasp's native ORM, so this isn't a separate integration to maintain.
 3. **Deferred Epic 0's full multi-tenant Group layer** — no validated customer need yet for multi-organization tenancy; single-org tenancy with an `org_id` reserved on every table keeps the door open without paying the complexity cost now. (The much smaller, AddMin-internal Platform Operator console is a separate decision — see 7 below.)
 4. **Deferred Payment Gateway/Execution Mode to Phase 4** — avoids taking on PCI-DSS scope and a commercial gateway relationship before Payment Tracking Mode alone has been validated with paying customers. This is separate from decision 6 below.
 5. **Web-first, no mobile app in Phase 0-3** — Facility Staff field actions (photo/video evidence, maintenance updates) work adequately on mobile web in the pilot phase; a native/offline app is only justified once volume of field usage is proven.
-6. **Brought AddMin's own SaaS billing (F-19, Stripe/Razorpay Subscriptions) into Phase 1, not deferred like the P1 payment gateway above** — the marketing site was already built self-serve, with "Start Free Trial" as the primary CTA across the homepage, header, and pricing page; shipping Phase 1 without a working trial-to-subscribe flow would mean the live marketing site makes a promise the product can't keep.
+6. **Brought AddMin's own SaaS billing (F-19, Stripe) into Phase 1, not deferred like the P1 payment gateway above** — the marketing site is self-serve, with "Start Free Trial" as the primary CTA across the homepage, header, and pricing page (see `09-marketing-website.md`); shipping Phase 1 without a working trial-to-subscribe flow would mean the marketing site makes a promise the product can't keep.
 7. **Scoped in a lightweight Platform Operator console (F-20) alongside F-19, but explicitly did not build Epic 0's full Group tenancy** — AddMin's own team needs a way to view all orgs and manually flip a subscription/tenant status the moment the first sales-assisted deal closes (F-19's alternate path already assumed this existed); a single internal role with cross-org read/write on two fields solves that completely, without the Membership abstraction, permission catalogue, or break-glass consent flow that a customer-facing multi-org Group hierarchy would require. Revisit Group tenancy only per `03-analysis.md`'s expansion discipline (≥10 paying orgs, ≥2 explicitly asking for it).
 
 ## Initiatives (cross-cutting)

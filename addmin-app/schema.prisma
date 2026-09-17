@@ -1,0 +1,686 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// =============================================================================
+// Build Step 02 (planmysaas-blueprint/08-build-playbook.md): data layer.
+// Transcribed field-for-field from planmysaas-blueprint/04-architecture.md's
+// data model. `org_id` is on every model except Organization and PlatformOperator,
+// per 04-architecture.md's note that it "reserves an org_id on every table" so
+// the deferred multi-org Group-tenancy layer never needs a destructive migration.
+//
+// Four FK targets referenced by 04-architecture.md's "-> has many / -> belongs to"
+// annotations are NOT modeled here because 04-architecture.md never gives them
+// field-level definitions (only names them as another module's owned entity):
+//   - UtilityBill.invoice_doc_id / ComplianceItem.document_id -> Document
+//     (Document Module, 04-architecture.md - not yet specified)
+//   - Asset "-> has many AssetAssignment" (Asset Module - introduced in Step 08)
+//   - User "-> has many RoleAssignment / ApprovalAction" (Identity & Access /
+//     Workflow & Approval modules - introduced in Steps 03 and 07)
+// These are kept as plain nullable scalar columns, not Prisma relations, so this
+// step transcribes 04-architecture.md rather than inventing schema it doesn't
+// specify. Revisit when the owning module's build step defines them for real.
+//
+// User.org_id / User.role / User.email are nullable for now even though
+// 04-architecture.md marks them non-nullable: nothing populates them until
+// Step 03 wires org creation into the signup flow. Tighten to NOT NULL once
+// Step 03 lands.
+// =============================================================================
+
+// --- Identity & Access Module --------------------------------------------
+
+model User {
+  id String @id @default(uuid())
+
+  org_id      String?
+  email       String?   @unique
+  role        UserRole?
+  office_scope Json?
+  mfa_enabled Boolean  @default(false)
+  // TOTP secret (base32), set once during MFA enrollment (src/server/auth/mfa.ts).
+  // Never returned to the client after enrollment completes.
+  mfa_secret  String?
+  // Set by verifyMfaCode succeeding; authz.ts requires this to be in the
+  // future for any mfa_enabled user, on every request -- see mfa.ts.
+  mfa_verified_until DateTime?
+
+  organization Organization? @relation(fields: [org_id], references: [id])
+
+  officeSetupProfilesActivated OfficeSetupProfile[]     @relation("OfficeSetupProfileActivatedBy")
+  checklistItemsOwned          OfficeChecklistItem[]    @relation("ChecklistItemOwner")
+  obligationSchedulesOwned     RecurringObligationSchedule[] @relation("ObligationScheduleOwner")
+  paymentsAuthorized           Payment[]                @relation("PaymentAuthorizedBy")
+  auditLogs                    AuditLog[]               @relation("AuditLogActor")
+  invitesSent                  Invite[]                 @relation("InviteInvitedBy")
+
+  @@index([org_id])
+}
+
+enum UserRole {
+  platform_admin
+  office_admin
+  checker
+  payment_authorizer
+  vendor_manager
+  compliance_coordinator
+  facility_staff
+  office_head
+  employee
+}
+
+// Deliberately not a row in User, and carries no org_id -- an AddMin staff
+// identity, authenticated on a separate /platform login, never a Membership
+// of any customer Organization. See 04-architecture.md.
+model PlatformOperator {
+  id                 String    @id @default(uuid())
+  email              String    @unique
+  password_hash      String
+  mfa_enabled        Boolean   @default(false)
+  mfa_secret         String?
+  mfa_verified_until DateTime?
+  created_at         DateTime  @default(now())
+}
+
+// Not in 04-architecture.md's original data model -- added in Build Step 03
+// because the user chose an invite-only teammate flow: only the first user
+// of an Organization signs up self-serve (creating the org, per F-19); every
+// other User is created by accepting one of these. See userSignupFields.ts.
+model Invite {
+  id           String       @id @default(uuid())
+  org_id       String
+  email        String
+  role         UserRole
+  office_scope Json?
+  token        String       @unique
+  status       InviteStatus @default(pending)
+  invited_by   String
+  created_at   DateTime     @default(now())
+  expires_at   DateTime
+
+  organization Organization @relation(fields: [org_id], references: [id])
+  invitedBy    User         @relation("InviteInvitedBy", fields: [invited_by], references: [id])
+
+  @@index([org_id])
+}
+
+enum InviteStatus {
+  pending
+  accepted
+  expired
+  revoked
+}
+
+// --- Organization & Office Module ----------------------------------------
+
+model Organization {
+  id               String                     @id @default(uuid())
+  name             String
+  gstin            String?
+  default_currency String
+  timezone         String
+  tenant_status    OrganizationTenantStatus   @default(active)
+  created_at       DateTime                   @default(now())
+
+  subscription Subscription?
+  offices      Office[]
+  vendors      Vendor[]
+  users        User[]
+  landlords    Landlord[]
+}
+
+enum OrganizationTenantStatus {
+  active
+  suspended
+}
+
+model Subscription {
+  id                                String             @id @default(uuid())
+  org_id                            String             @unique
+  plan                              SubscriptionPlan
+  status                            SubscriptionStatus
+  trial_ends_at                     DateTime?
+  billing_provider_customer_id      String?
+  billing_provider_subscription_id  String?
+  activated_at                      DateTime?
+
+  organization Organization @relation(fields: [org_id], references: [id])
+
+  @@index([org_id])
+}
+
+enum SubscriptionPlan {
+  starter
+  growth
+  enterprise
+}
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  expired
+  canceled
+}
+
+model Office {
+  id             String            @id @default(uuid())
+  org_id         String
+  name           String
+  address        String
+  office_type    OfficeType
+  ownership_type OwnershipType
+  setup_status   OfficeSetupStatus
+  created_at     DateTime          @default(now())
+
+  organization Organization @relation(fields: [org_id], references: [id])
+
+  setupProfile     OfficeSetupProfile?
+  checklistItems   OfficeChecklistItem[]
+  utilityAccounts  UtilityAccount[]
+  leases           Lease[]
+  assets           Asset[]
+  maintenanceRequests MaintenanceRequest[]
+  complianceItems  ComplianceItem[]
+
+  @@index([org_id])
+}
+
+enum OfficeType {
+  head_office
+  regional
+  branch
+  warehouse
+  other
+}
+
+enum OwnershipType {
+  owned
+  rented
+}
+
+enum OfficeSetupStatus {
+  draft
+  setup_incomplete
+  active
+  inactive
+}
+
+// --- Onboarding Module -----------------------------------------------------
+
+model OfficeSetupProfile {
+  id             String    @id @default(uuid())
+  org_id         String
+  office_id      String    @unique
+  completion_pct Decimal
+  activated_at   DateTime?
+  activated_by   String?
+
+  office       Office @relation(fields: [office_id], references: [id])
+  activatedBy  User?  @relation("OfficeSetupProfileActivatedBy", fields: [activated_by], references: [id])
+
+  checklistItems OfficeChecklistItem[]
+
+  @@index([org_id])
+}
+
+model OfficeChecklistItem {
+  id                  String                  @id @default(uuid())
+  org_id              String
+  office_id           String
+  office_setup_profile_id String?
+  template_item_code  String
+  category            ChecklistCategory
+  applicability       ChecklistApplicability
+  status              ChecklistItemStatus
+  owner_user_id       String?
+  linked_entity_type  String?
+  linked_entity_id    String?
+
+  office              Office              @relation(fields: [office_id], references: [id])
+  officeSetupProfile  OfficeSetupProfile? @relation(fields: [office_setup_profile_id], references: [id])
+  owner               User?               @relation("ChecklistItemOwner", fields: [owner_user_id], references: [id])
+
+  @@index([org_id])
+}
+
+enum ChecklistCategory {
+  utility
+  facility
+  compliance
+  vendor
+  asset
+  role
+}
+
+enum ChecklistApplicability {
+  yes
+  no
+  not_applicable
+}
+
+enum ChecklistItemStatus {
+  pending
+  configured
+  complete
+}
+
+// --- Utility Module ----------------------------------------------------
+
+model UtilityAccount {
+  id               String               @id @default(uuid())
+  org_id           String
+  office_id        String
+  utility_type     UtilityType
+  provider_name    String
+  meter_account_no String
+  billing_cycle    BillingCycle
+  vendor_id        String?
+  status           UtilityAccountStatus
+
+  office Office  @relation(fields: [office_id], references: [id])
+  vendor Vendor? @relation(fields: [vendor_id], references: [id])
+
+  bills     UtilityBill[]
+
+  @@index([org_id])
+}
+
+enum UtilityType {
+  electricity
+  water
+  internet
+  telephone
+  gas
+  dg
+  ups
+  solar
+  other
+}
+
+enum BillingCycle {
+  monthly
+  bimonthly
+  quarterly
+}
+
+enum UtilityAccountStatus {
+  active
+  inactive
+}
+
+// --- Obligation Engine ---------------------------------------------------
+
+// scope_ref_id is a polymorphic id, not a typed Prisma FK: depending on
+// scope_type it points into UtilityAccount (utility), Lease (rent/cam),
+// AMCContract (amc), or ComplianceItem (compliance). org_id is stored directly
+// here (rather than relying on a hop through one of those four tables) because
+// a polymorphic reference isn't a real FK Prisma can traverse.
+model RecurringObligationSchedule {
+  id                    String             @id @default(uuid())
+  org_id                String
+  scope_type            ObligationScopeType
+  scope_ref_id           String
+  frequency             ObligationFrequency
+  expected_window_days  Int
+  due_rule              String
+  owner_user_id         String
+  active_from           DateTime           @db.Date
+  active_to             DateTime?          @db.Date
+
+  owner User @relation("ObligationScheduleOwner", fields: [owner_user_id], references: [id])
+
+  instances ObligationInstance[]
+
+  @@index([org_id])
+  @@index([scope_type, scope_ref_id])
+}
+
+enum ObligationScopeType {
+  utility
+  rent
+  cam
+  amc
+  compliance
+}
+
+enum ObligationFrequency {
+  monthly
+  bimonthly
+  quarterly
+  annual
+}
+
+model ObligationInstance {
+  id                String                 @id @default(uuid())
+  org_id            String
+  schedule_id       String
+  period            String
+  expected_date     DateTime               @db.Date
+  due_date          DateTime?              @db.Date
+  status            ObligationInstanceStatus
+  linked_ref_type   String?
+  linked_ref_id     String?
+
+  schedule RecurringObligationSchedule @relation(fields: [schedule_id], references: [id])
+
+  bill UtilityBill?
+
+  @@index([org_id])
+}
+
+enum ObligationInstanceStatus {
+  expected
+  received
+  missing
+  in_process
+  closed
+  cancelled
+}
+
+model UtilityBill {
+  id                      String            @id @default(uuid())
+  org_id                  String
+  utility_account_id      String
+  obligation_instance_id  String?           @unique
+  billing_period          String
+  amount                  Decimal
+  due_date                DateTime          @db.Date
+  status                  UtilityBillStatus
+  // References Document (Document Module, 04-architecture.md) -- not yet
+  // modeled, see file header. Plain id, not a Prisma relation, for now.
+  invoice_doc_id          String?
+
+  utilityAccount     UtilityAccount      @relation(fields: [utility_account_id], references: [id])
+  obligationInstance ObligationInstance? @relation(fields: [obligation_instance_id], references: [id])
+
+  payments Payment[]
+
+  @@index([org_id])
+}
+
+enum UtilityBillStatus {
+  draft
+  pending_approval
+  approved
+  rejected
+  partially_paid
+  paid
+  overdue
+}
+
+// --- Property & Lease Module ---------------------------------------------
+
+model Lease {
+  id               String      @id @default(uuid())
+  org_id           String
+  office_id        String
+  landlord_id      String
+  start_date       DateTime    @db.Date
+  end_date         DateTime    @db.Date
+  rent_amount      Decimal
+  cam_amount       Decimal?
+  security_deposit Decimal?
+  escalation_pct   Decimal?
+  status           LeaseStatus
+
+  office   Office   @relation(fields: [office_id], references: [id])
+  landlord Landlord @relation(fields: [landlord_id], references: [id])
+
+  payments Payment[]
+
+  @@index([org_id])
+}
+
+enum LeaseStatus {
+  draft
+  active
+  expiring
+  renewed
+  terminated
+}
+
+model Landlord {
+  id           String @id @default(uuid())
+  org_id       String
+  name         String
+  pan          String?
+  bank_details Json
+
+  organization Organization @relation(fields: [org_id], references: [id])
+
+  leases Lease[]
+
+  @@index([org_id])
+}
+
+// --- Vendor Module ---------------------------------------------------------
+
+model Vendor {
+  id         String        @id @default(uuid())
+  org_id     String
+  name       String
+  category   VendorCategory
+  pan_gstin  String?
+  status     VendorStatus
+
+  organization Organization @relation(fields: [org_id], references: [id])
+
+  amcContracts    AMCContract[]
+  utilityAccounts UtilityAccount[]
+  workOrders      WorkOrder[]
+
+  @@index([org_id])
+}
+
+enum VendorCategory {
+  utility_provider
+  dg
+  ups
+  solar
+  amc
+  building_mgmt
+  other
+}
+
+enum VendorStatus {
+  pending_activation
+  active
+  suspended
+  inactive
+}
+
+model AMCContract {
+  id                 String            @id @default(uuid())
+  org_id             String
+  vendor_id          String
+  linked_entity_type String
+  linked_entity_id   String
+  start_date         DateTime          @db.Date
+  end_date           DateTime          @db.Date
+  status             AMCContractStatus
+
+  vendor Vendor @relation(fields: [vendor_id], references: [id])
+
+  @@index([org_id])
+}
+
+enum AMCContractStatus {
+  active
+  due_for_renewal
+  expired
+  closed
+}
+
+// --- Facility & Maintenance Module -----------------------------------------
+
+model MaintenanceRequest {
+  id         String                  @id @default(uuid())
+  org_id     String
+  office_id  String
+  category   String
+  priority   MaintenancePriority
+  status     MaintenanceRequestStatus
+
+  office Office @relation(fields: [office_id], references: [id])
+
+  workOrder WorkOrder?
+
+  @@index([org_id])
+}
+
+enum MaintenancePriority {
+  low
+  medium
+  high
+  critical
+}
+
+enum MaintenanceRequestStatus {
+  open
+  assigned
+  in_progress
+  resolved
+  closed
+}
+
+model WorkOrder {
+  id                       String          @id @default(uuid())
+  org_id                   String
+  maintenance_request_id   String          @unique
+  vendor_id                String?
+  sla_due_at               DateTime
+  status                   WorkOrderStatus
+
+  maintenanceRequest MaintenanceRequest @relation(fields: [maintenance_request_id], references: [id])
+  vendor             Vendor?            @relation(fields: [vendor_id], references: [id])
+
+  @@index([org_id])
+}
+
+enum WorkOrderStatus {
+  assigned
+  in_progress
+  completed
+  verified
+}
+
+// --- Asset Module ------------------------------------------------------
+
+model Asset {
+  id            String      @id @default(uuid())
+  org_id        String
+  office_id     String
+  category      String
+  serial_no     String?
+  status        AssetStatus
+  warranty_end  DateTime?   @db.Date
+
+  office Office @relation(fields: [office_id], references: [id])
+
+  // "-> has many AssetAssignment" in 04-architecture.md is not modeled yet --
+  // see file header. AssetAssignment/AssetRequest are introduced in Step 08.
+
+  @@index([org_id])
+}
+
+enum AssetStatus {
+  available
+  assigned
+  under_service
+  retired
+}
+
+// --- Compliance Module -----------------------------------------------------
+
+model ComplianceItem {
+  id               String               @id @default(uuid())
+  org_id           String
+  office_id        String
+  compliance_type  String
+  status           ComplianceItemStatus
+  expiry_date      DateTime?            @db.Date
+  // References Document (Document Module, 04-architecture.md) -- not yet
+  // modeled, see file header. Plain id, not a Prisma relation, for now.
+  document_id      String?
+
+  office Office @relation(fields: [office_id], references: [id])
+
+  @@index([org_id])
+}
+
+enum ComplianceItemStatus {
+  missing
+  valid
+  expiring
+  expired
+  not_applicable
+}
+
+// --- Payment Module ----------------------------------------------------
+
+// payable_type/payable_id is a polymorphic reference (utility_bill/rent/cam/
+// vendor), not a typed Prisma FK -- org_id is stored directly for the same
+// reason as RecurringObligationSchedule above.
+model Payment {
+  id             String        @id @default(uuid())
+  org_id         String
+  payable_type   PayableType
+  payable_id     String
+  amount         Decimal
+  tds_amount     Decimal?
+  net_amount     Decimal
+  mode           String
+  status         PaymentStatus
+  authorized_by  String?
+
+  authorizedBy User? @relation("PaymentAuthorizedBy", fields: [authorized_by], references: [id])
+
+  // Convenience FKs so UtilityBill/Lease payments are also real relations,
+  // in addition to the generic payable_type/payable_id pair above.
+  utility_bill_id String?
+  utilityBill     UtilityBill? @relation(fields: [utility_bill_id], references: [id])
+  lease_id        String?
+  lease           Lease?       @relation(fields: [lease_id], references: [id])
+
+  @@index([org_id])
+}
+
+enum PayableType {
+  utility_bill
+  rent
+  cam
+  vendor
+}
+
+enum PaymentStatus {
+  pending
+  approved
+  initiated
+  paid
+  failed
+  partially_paid
+  overdue
+}
+
+// --- Audit Module ------------------------------------------------------
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  org_id         String
+  actor_user_id  String
+  entity_type    String
+  entity_id      String
+  action         String
+  before_value   Json?
+  after_value    Json?
+  created_at     DateTime @default(now())
+
+  actor User @relation("AuditLogActor", fields: [actor_user_id], references: [id])
+
+  @@index([org_id])
+}

@@ -5,7 +5,7 @@
 - Modules covered: 15 (Identity & Access, Organization & Office, Onboarding, Billing & Subscription, Platform Operations, Utility, Property & Lease, Obligation Engine, Workflow & Approval, Payment, Facility & Maintenance, Asset, Vendor, Compliance, Reporting — grouped into 20 specs)
 - Coverage: 100% of P0 modules have at least 1 feature spec
 
-The marketing site (`addmin-site/`) now routes its primary CTA — "Start Free Trial" — directly into this product's funnel: F-01 (register) → F-04/F-05 (onboard) → F-19 (subscribe). "Book a Demo" is retained only as a secondary, sales-assisted path for the Enterprise plan and design-partner pilots, per `addmin-site/content/contact.md`.
+The marketing site (`addmin-marketing/`, built with Astro — see `09-marketing-website.md`) now routes its primary CTA — "Start Free Trial" — directly into this product's funnel: F-01 (register) → F-04/F-05 (onboard) → F-19 (subscribe). "Book a Demo" is retained only as a secondary, sales-assisted path for the Enterprise plan and design-partner pilots, per the marketing site's Contact page.
 
 ## Feature index
 
@@ -240,7 +240,7 @@ Gives a visible, always-present progress metric during onboarding — identified
 **Priority:** P0 · **Effort:** 5 days
 
 #### Purpose
-Makes the marketing site's "Start Free Trial" CTA (`addmin-site/hugo.toml`, `content/_index.md`, `content/pricing.md`) a real, working product path: register (F-01) → onboard (F-04/F-05) → subscribe, instead of routing prospects to a sales form. This is AddMin's own SaaS billing — charging the customer organization for using AddMin — and must never be confused with the Payment module (F-11), which tracks the customer's own payments to their utility providers and landlords.
+Makes the marketing site's "Start Free Trial" CTA (the Astro site's homepage and Pricing page, `addmin-marketing/src/pages/`) a real, working product path: register (F-01) → onboard (F-04/F-05) → subscribe via Stripe Checkout, instead of routing prospects to a sales form. This is AddMin's own SaaS billing — charging the customer organization for using AddMin — and must never be confused with the Payment module (F-11), which tracks the customer's own payments to their utility providers and landlords.
 
 #### User flow
 ```
@@ -252,21 +252,21 @@ Makes the marketing site's "Start Free Trial" CTA (`addmin-site/hugo.toml`, `con
 6. Subscription transitions from "trialing" to "active"; billing begins per the confirmed plan
 7. Alternate: user ignores the prompt and keeps using the trial — a reminder notification fires at 3 days and 1 day before trial expiry
 8. Alternate: trial expires with no plan chosen — org's access is gated to a "choose a plan to continue" screen until subscribed
-9. Alternate: an Enterprise prospect comes through the sales-assisted "Contact Sales" path (addmin-site/content/contact.md) instead — a Platform Operator (AddMin-internal, via the Platform Ops Console, F-20 — not the org-scoped "Platform Administrator" customer role) sets their Subscription directly to "active" with a negotiated plan, bypassing the trial state entirely
+9. Alternate: an Enterprise prospect comes through the sales-assisted "Contact Sales" path (the marketing site's Contact page) instead — a Platform Operator (AddMin-internal, via the Platform Ops Console, F-20 — not the org-scoped "Platform Administrator" customer role) sets their Subscription directly to "active" with a negotiated plan, bypassing the trial state entirely
 ```
 
 #### Acceptance criteria
 - [ ] Completing signup creates a Subscription in "trialing" status with trial_ends_at set to 14 days out, with zero payment method required.
 - [ ] A trialing org has full functional access to onboarding, office activation, and every P0 module — subscription status never blocks onboarding.
 - [ ] The `?plan=` query parameter from the marketing site's pricing-page CTAs pre-selects that plan on /app/subscribe without charging until the user explicitly confirms.
-- [ ] Submitting valid payment details transitions Subscription status to "active" within 5 seconds and is confirmed against the billing provider's authoritative webhook/callback, not just client-side confirmation.
+- [ ] Submitting valid payment details transitions Subscription status to "active" within 5 seconds and is confirmed against Stripe's authoritative webhook (`POST /payments-webhook`), not just client-side confirmation.
 - [ ] Reminder notifications fire at 3 days and 1 day before trial expiry.
 - [ ] An org whose trial expires with no plan chosen is gated to a "choose a plan to continue" state; every other role/office authorization rule (F-02) still applies independently on top of this gate.
 - [ ] A sales-assisted Enterprise or design-partner org can be set to "active" directly by a Platform Operator (F-20) without ever entering "trialing" status.
 - [ ] Every subscription status transition is recorded in the audit trail (F-02's Audit Module).
 
 #### Edge cases
-- Billing provider payment webhook arrives before or after the browser redirect from /app/subscribe completes — status transition must be idempotent regardless of arrival order.
+- Stripe's webhook arrives before or after the browser redirect from /app/subscribe completes — status transition must be idempotent regardless of arrival order.
 - A user returns to the product for the first time after their trial has already expired — they land on the "choose a plan to continue" screen immediately, not on a broken or blank Office Home.
 - A payment method fails during subscription confirmation — the org remains correctly in "trialing" (or "past_due" if already active and a renewal failed), never in an ambiguous or silently-broken state.
 

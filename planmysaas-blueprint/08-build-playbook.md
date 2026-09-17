@@ -5,1056 +5,881 @@
 
 ## How to use this playbook
 
-This is a build sequence, not a wishlist. Each step depends on the previous one working — Step 05's trial/subscription gate assumes Step 04's onboarding already produces an activatable office, Step 06's Platform Operator console assumes Step 05's `Subscription` entity already exists, Step 07's Recurring Obligation Engine assumes Step 03's authorization layer already rejects cross-office access, and Step 08's approval workflow assumes Step 04's office hierarchy and role assignment already exist. Building out of order means debugging a feature against a foundation that isn't actually solid yet.
+This is a build sequence, not a wishlist. Each step depends on the previous one — Step 04's auth gate assumes Step 02's Prisma schema exists; Step 08's Stripe webhook assumes Step 01's `wasp deploy fly launch` pipeline is already live. Skipping ahead means building on a foundation that isn't there yet.
 
-After every step there is a "stop and review" gate. Do not advance until every rubric item checks. The next step assumes everything before it works — if you skip a rubric item because it "probably works," you are borrowing time against a much larger debugging session three steps from now, at which point you won't know which of three unverified layers actually broke.
+After every step there is a "stop and review" gate. Do not advance until every rubric item checks. The next step assumes everything before it works — a half-finished RBAC layer in Step 04 will silently leak data in every feature step built on top of it, and you won't find out until a design partner does.
 
 ## Build sequence — at a glance
 
 ```
-01 Repo bootstrap + deploy pipeline                              (no deps — leaf)
-   └─ 02 Data layer (Prisma schema, all core entities)
-        └─ 03 Auth + RBAC/office-scope enforcement (F-01, F-02)
-             └─ 04 Org/Office hierarchy + Guided Onboarding (F-03, F-04, F-05)
-                  └─ 05 Free Trial & Subscription Activation (F-19)
-                       └─ 06 Platform Operator Console (F-20)
-                            └─ 07 Utility Connection + Recurring Obligation Engine (F-06, F-07, F-08)
-                                 └─ 08 Bill Entry + Approval Workflow + Payment Tracking (F-09, F-10, F-11)
-                                      └─ 09 Property & Lease + TDS (F-12, F-13)
-                                           └─ 10 Vendor, Maintenance, Asset, Compliance (F-14, F-15, F-16, F-17)
-                                                └─ 11 Reporting: Office Home, My Actions, Executive Dashboard (F-18)
-                                                     └─ 12 Frontend polish (loading/empty/error states, design system)
-                                                          └─ 13 Production deploy + observability
-                                                               └─ 14 Post-launch ops & runbooks (root)
+01 Repo bootstrap + main.wasp + Fly.io deploy pipeline      (no deps — leaf)
+   └─ 02 Data layer (Prisma schema, org-scoped entities)
+        └─ 03 Auth + RBAC/office-scope + Platform Operator identity
+             └─ 04 Onboarding core (F-03, F-04, F-05)
+                  └─ 05 Billing & Subscription (F-19, F-20, Stripe + webhook)
+                       └─ 06 Obligation Engine + background jobs (F-06, F-07, F-08)
+                            └─ 07 Bill lifecycle: entry, approval, payment (F-09, F-10, F-11)
+                                 └─ 08 Domain breadth: lease, vendor, facility, asset, compliance (F-12–F-17)
+                                      └─ 09 Reporting: Office Home, My Actions, Executive Dashboard (F-18)
+                                           └─ 10 Marketing site (Astro, addmin-marketing/)
+                                                └─ 11 Production hardening + observability
 ```
 
-The marketing site (`addmin-site/`) now sends every "Start Free Trial" click into Step 03's signup flow, which chains into Step 04's onboarding and Step 05's subscription activation — this is the register → onboard → subscribe order the marketing site's CTA promises, and Step 05 exists specifically to make that promise true in the product, not just in copy. Step 05's subscription billing is AddMin's own SaaS billing (charging the customer for using AddMin) — do not confuse it with the Payment module in Step 08, which tracks the *customer's* utility/rent payments to their own vendors and landlords. Payment Execution Mode for that customer-facing payment flow remains deferred to Phase 4 per `07-phases.md`.
-
-**If you've already completed Step 02** (this repo has — see `d992408 Build Step 02: Prisma data layer (all 19 core entities)`): Step 06 below adds `tenant_status` to `Organization` and a new `PlatformOperator` entity via an **additive migration**, not a redo of Step 02. Do not edit or revert the existing Step 02 migration file — create a new one on top of it, exactly as any schema change after initial launch would work in production.
+(11 steps. Payments/billing is not skipped because AddMin's own SaaS revenue model requires it from Phase 1 per `07-phases.md`'s Decision 6. No mobile-bridge step — Phase 0-3 is web-first per Decision 5.)
 
 ---
 
-## Build Step 01 — Repo bootstrap & deploy pipeline
+## Build Step 01 — Repo bootstrap, `main.wasp`, and the Fly.io deploy pipeline
 
 ### 🎯 Goal
-A blank Next.js + NestJS monorepo deploys to staging on every push to `main`, with a health-check endpoint returning 200.
+Running `wasp start` locally serves an empty AddMin app with a working Postgres connection, and `wasp deploy fly launch` puts that same empty app live on Fly.io with a real URL.
 
 ### 📍 Why this is the leaf
-Every later step assumes a working deploy pipeline exists to verify against. Without it, "does this work" means "does it work on my laptop," which is not the same question you'll be answering once a design partner is using this.
+Every later step adds `query`/`action`/`entity`/`job` declarations to `main.wasp` and Prisma models to `schema.prisma`. If the project isn't scaffolded correctly — Wasp CLI version pinned, Postgres reachable, deploy pipeline proven — every subsequent step inherits that uncertainty. Proving the deploy pipeline works on an empty app, before there's anything worth losing, is cheaper than discovering a Fly.io config problem in Step 09.
 
 ### 📥 Inputs (preconditions before you start)
-- Node.js 20+, pnpm installed
-- A staging hosting account (AWS or Render, per `04-architecture.md`'s tech stack)
-- A Postgres instance provisioned (staging tier is fine)
-- A GitHub repo with CI access configured
+- Wasp CLI installed (`curl -sSL https://get.wasp.sh/installer.sh | sh`), Node.js LTS, Fly.io CLI (`flyctl`) authenticated
+- A Fly.io account with billing enabled (Postgres + two apps — client, server — will run there)
+- A local or containerized Postgres instance for development (Wasp can also spin one up via `wasp db start`)
+- Accounts created (not yet wired up) for: SendGrid, AWS S3 (or S3-compatible), Stripe — API keys acquired but held out of the repo
 
 ### 📤 Outputs (what exists after this step passes)
-- A monorepo with `apps/web` (Next.js 14) and `apps/api` (NestJS) packages
-- A `GET /health` endpoint on the API returning `{ status: "ok" }`
-- A CI pipeline (GitHub Actions) running lint + typecheck + build on every PR
-- A staging deploy that updates automatically on merge to `main`
+- A git repo with `main.wasp`, `schema.prisma`, `src/` client and server folders, committed and pushed
+- `wasp start` runs the app locally at `localhost:3000` with a live Postgres connection
+- `wasp deploy fly launch addmin-app mia` (or your chosen region) has provisioned a client app, server app, and Postgres on Fly.io, reachable at a public URL
+- A `.env.server` and `.env.client` pattern established, both git-ignored, with `.env.server.example` committed showing required keys with placeholder values
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-apps/web/                 Next.js 14 App Router frontend
-apps/api/                 NestJS backend
-  src/main.ts             App bootstrap
-  src/health/health.controller.ts   GET /health
-packages/db/              Prisma schema + generated client (shared package)
-.github/workflows/ci.yml  Lint, typecheck, build on PR
-.github/workflows/deploy.yml  Deploy to staging on merge to main
+main.wasp                      — app definition: app config, auth config stub, route/page declarations grow here every step
+schema.prisma                  — Prisma schema, starts with just the Wasp-managed User extension
+src/client/                    — React pages/components (Wasp convention)
+src/server/                    — TypeScript operation implementations, one folder per domain module (utility/, obligation/, billing/, etc.)
+.env.server.example            — documents DATABASE_URL, SENDGRID_API_KEY, STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, AWS_S3_* keys — values blank
+.gitignore                     — .env.server, .env.client, .wasp/ build output
+fly.toml (client + server)     — generated by `wasp deploy fly launch`, committed after first successful deploy
 ```
 
 **Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
-- Next.js 14 App Router for `apps/web` — server components fit the dashboard-heavy UI from `06-frontend.md`.
-- NestJS for `apps/api` — module boundaries map directly to the 17 modules in `04-architecture.md`.
-- PostgreSQL + Prisma — ACID guarantees for financial/audit data.
-- pnpm workspaces for the monorepo — shared `packages/db` types between web and api.
+- Wasp compiles one `main.wasp` spec into React client + Node/Express server + Prisma schema — no hand-written REST layer, ever.
+- PostgreSQL + Prisma is the only datastore; `pg-boss` (Step 06) reuses this same database for job queue state — no Redis.
+- Deployment target is Fly.io via `wasp deploy fly launch`, one command for client + server + Postgres together.
+- TailwindCSS + shadcn/ui is the UI layer — install and configure both now, even though no real pages exist yet, so Step 04 doesn't also have to solve styling setup.
 
 **Patterns (mandatory across the codebase):**
-- Every API module lives under `apps/api/src/<module-name>/`, matching a module name from `04-architecture.md` exactly (e.g., `utility`, `obligation-engine`, `workflow`).
-- No business logic in controllers — controllers call a service; services contain logic.
-- Environment variables are never committed. `.env.example` documents every required variable with a one-line comment.
+- Every domain module gets its own folder under `src/server/` (e.g. `src/server/utility/`, `src/server/billing/`) mirroring the module list in `04-architecture.md` — operations for a module never live scattered across the tree.
+- `main.wasp` route/page/operation declarations are grouped by module with a comment header, in the same order as `04-architecture.md`'s API surface table — this file becomes the map of the whole app; keep it navigable.
+- No secrets in `main.wasp`, `schema.prisma`, or any committed file — every credential is `process.env.X`, sourced from `.env.server`.
 
 ### ✅ Acceptance rubric
-- [ ] `pnpm install && pnpm dev` starts both `apps/web` and `apps/api` locally without error.
-- [ ] `curl localhost:3001/health` returns `{ "status": "ok" }` with a 200 status code.
-- [ ] A PR opened against `main` triggers CI and shows a pass/fail status check.
-- [ ] Merging to `main` triggers an automatic staging deploy visible in the hosting provider's dashboard.
-- [ ] The staging URL's `/health` endpoint returns 200 within 60 seconds of deploy completing.
-- [ ] `.env.example` exists and lists every environment variable the API needs, with no real secrets present.
-- [ ] `packages/db` exports a typed Prisma client importable from both `apps/web` and `apps/api`.
+- [ ] `wasp start` boots without error and serves a blank page at `localhost:3000`.
+- [ ] `wasp db migrate-dev` runs cleanly against local Postgres with zero models beyond Wasp's default `User`.
+- [ ] `wasp deploy fly launch` completes and returns a live HTTPS URL for both client and server.
+- [ ] Visiting the deployed client URL loads the same blank page served locally.
+- [ ] `.env.server` is listed in `.gitignore` and is NOT present in `git log` history.
+- [ ] `.env.server.example` exists and lists every env var name this project will need (`DATABASE_URL`, `SENDGRID_API_KEY`, `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `AWS_S3_BUCKET`, `AWS_S3_ACCESS_KEY_ID`, `AWS_S3_SECRET_ACCESS_KEY`) with no real values.
+- [ ] Sentry (error monitoring) and Plausible (analytics) are wired into the client and server per `07-phases.md`'s Phase 0 task list, confirmed by triggering one manual test error and seeing it in the Sentry dashboard.
+- [ ] `wasp deploy fly secrets set` (or equivalent) has pushed the real secrets to the Fly.io server app, verified by checking `flyctl secrets list`.
+- [ ] A second engineer can clone the repo, copy `.env.server.example` to `.env.server`, fill in dev values, and get `wasp start` running within 15 minutes.
 
 ### ⚠️ Edge cases to handle
-- CI runs on a fork PR with no access to staging secrets — build/lint/typecheck must still pass without requiring secret access.
-- A failed deploy must not take down the previous working staging deployment — use a rolling or blue-green deploy strategy, not a delete-then-create.
+- Fly.io Postgres provisioning can silently fail on free-tier resource limits — confirm the provisioned Postgres actually has a reachable connection string before moving on, don't assume success from the CLI's exit code alone.
+- Wasp CLI version drift between engineers causes `main.wasp` parse errors that look like syntax bugs — pin the Wasp version in a `README` or `.tool-versions` file.
+- `wasp deploy fly launch` re-run on an already-provisioned app can create duplicate Fly apps if the app name isn't reused exactly — always pass the same app name.
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't commit a `.env` file with real staging credentials — this leaks into git history permanently even if deleted later.
-- Don't put business logic directly in NestJS controllers "just for now" — this pattern spreads and by Step 08 you'll have authorization checks scattered across a dozen controllers instead of centralized in Step 03's guard.
-- Don't skip the CI typecheck step to "move faster" — Prisma schema changes silently break consumers without it, and you won't find out until Step 07's Obligation Engine throws a runtime error.
+- Don't commit `.env.server` "just for now, I'll remove it later" — it never gets fully scrubbed from git history; treat this as a hard rule from commit one.
+- Don't skip the Fly.io deploy until "there's something worth deploying" — an empty-app deploy is the cheapest possible test of the pipeline; a broken pipeline discovered in Step 09 with a full feature set costs a full day to debug instead of twenty minutes now.
+- Never hand-write an Express route for something Wasp can express as a `query`/`action` — the one exception is the Stripe webhook in Step 05, which genuinely needs a raw `api` route.
+- Don't let `schema.prisma` and `main.wasp`'s `entities` field on jobs/operations drift apart — an operation that touches a Prisma model but doesn't declare it in `main.wasp`'s `entities: [...]` list will fail at runtime with a confusing "cannot access model" error, not a compile error.
 
 ### 📊 Quality bar
-- CI pipeline completes in under 5 minutes.
-- Staging deploy completes in under 10 minutes from merge.
-- Zero secrets present in git history (verify with a secret-scanning tool before first push).
+- Local `wasp start` cold boot to serving a page: under 30 seconds.
+- `wasp deploy fly launch` full provisioning: under 10 minutes.
+- Zero secrets present in any committed file, verified with `git log -p | grep -i "API_KEY\|SECRET"` returning nothing.
+- Sentry catches and reports a deliberately-thrown test error within 60 seconds of it firing.
 
 ### 🛑 Stop and review (gate before next step)
-1. Push a trivial change (e.g., a comment) to a feature branch, open a PR, confirm CI passes.
-2. Merge to `main`, watch the deploy pipeline run to completion.
-3. Curl the staging `/health` endpoint from your terminal — confirm 200 response.
-4. Delete your local `node_modules` and re-run `pnpm install && pnpm dev` — confirm it still works from a clean state.
-
-If any of these fail, do not proceed to Step 02 — a broken deploy pipeline means every later step's "is this deployed" question is unanswerable.
+1. Run `wasp start` locally and confirm the blank page loads at `localhost:3000`.
+2. Run `wasp deploy fly launch` (or `wasp deploy fly deploy` if already launched) and open the returned URL in a browser — confirm it matches the local page.
+3. Grep the full git history for `API_KEY`, `SECRET`, and `DATABASE_URL` — confirm zero real values appear.
+4. Trigger a deliberate error in a throwaway server function and confirm it appears in Sentry within a minute.
+5. Have a second person clone the repo cold and get `wasp start` working using only `.env.server.example` and the `README` — if they get stuck, the onboarding docs are the step's real deliverable and aren't done yet.
 
 ---
 
 ## Build Step 02 — Data layer (Prisma schema)
 
 ### 🎯 Goal
-Every core entity from `04-architecture.md`'s data model section exists as a Prisma model, migrated into the staging database, with seed data for one test Organization.
+Every entity from `04-architecture.md`'s data model exists as a Prisma model in `schema.prisma`, migrated into both local and staging Postgres, with `org_id` foreign keys present everywhere the architecture doc specifies.
 
-### 📍 Why this is the leaf
-Every feature from Step 04 onward reads and writes these tables. Getting the relations and enums wrong here (e.g., `ObligationInstance.status` missing the `missing` state) means every later step either can't be built correctly or gets built against a schema that has to be migrated again mid-project.
+### 📍 Why this depends on Step 01
+Prisma models can only be migrated against a working `DATABASE_URL` and a working `wasp db migrate-dev` pipeline — both proven in Step 01. Every subsequent step (auth, onboarding, billing, every feature) writes `query`/`action` code that reads and writes these models; none of it compiles or runs without the schema existing first.
 
 ### 📥 Inputs (preconditions before you start)
-- Step 01 complete: `packages/db` package exists with Prisma configured
-- Staging Postgres instance is reachable from CI and local dev
+- Step 01 passed: local Postgres reachable, `wasp db migrate-dev` proven to work
+- The full data model section of `04-architecture.md` open for reference — this step transcribes it, it does not redesign it
 
 ### 📤 Outputs (what exists after this step passes)
-- A `schema.prisma` file containing all entities listed in `04-architecture.md`'s "Data models" section: Organization, Office, OfficeSetupProfile, OfficeChecklistItem, UtilityAccount, RecurringObligationSchedule, ObligationInstance, UtilityBill, Lease, Landlord, Vendor, AMCContract, MaintenanceRequest, WorkOrder, Asset, ComplianceItem, Payment, User, AuditLog
-- A migration applied to staging
-- A seed script creating one test Organization, one Office, one User per role type
+- `schema.prisma` contains all 22 entities from `04-architecture.md` (Organization, PlatformOperator, Subscription, Office, OfficeSetupProfile, OfficeChecklistItem, UtilityAccount, RecurringObligationSchedule, ObligationInstance, UtilityBill, Lease, Landlord, Vendor, AMCContract, MaintenanceRequest, WorkOrder, Asset, ComplianceItem, Payment, User, AuditLog, plus Wasp's auth-linked identity model)
+- A clean migration history — `wasp db migrate-dev` produces one meaningfully-named migration per logical group of models, not one giant unreviewable migration
+- Every table that should be org-scoped (per `04-architecture.md`'s note that "every table" reserves `org_id" for the deferred Group-tenancy layer) has an `org_id` or reaches one via a FK chain — confirmed by a written note per entity in a schema comment
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-packages/db/prisma/schema.prisma      All entity models + enums
-packages/db/prisma/migrations/        Generated migration history
-packages/db/prisma/seed.ts            Test org/office/users seed script
+schema.prisma                       — all 22 models, relations, enums
+migrations/ (Prisma-managed)        — one migration per logical entity group: identity, org/office, obligation-engine, billing, workflow, domain modules
+src/server/shared/scoping.ts        — a helper (`assertOrgScope(ctx, orgId)`) every later operation imports — the one place org-scope enforcement logic lives
 ```
 
-**Tech decisions** (locked from blueprint stage 04):
-- Every organization-scoped table carries `org_id`; every office-scoped table carries `office_id` — this is what Step 03's authorization guard filters on.
-- Enums are Prisma-native enums (not string columns with app-level validation) for `UtilityBill.status`, `ObligationInstance.status`, `Payment.status`, etc. — exact values are specified in `04-architecture.md`.
-- `AuditLog` has no foreign key `onDelete: Cascade` from any entity — audit records must survive even if the record they describe is later hard-deleted (which itself should be rare; prefer soft status changes).
+**Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
+- PostgreSQL + Prisma, chosen for ACID guarantees on financial/audit data (Decision 2 in `07-phases.md`) — no NoSQL store anywhere in this system.
+- `org_id` reserved on every table per `04-architecture.md`'s explicit note, even though the multi-org Group-tenancy layer is deferred — this is a schema decision made now specifically so it never requires a destructive migration later.
 
 **Patterns (mandatory across the codebase):**
-- Every model that needs office-scoping includes `officeId String` with an index, never a nullable office reference for operational data.
-- Money fields (`amount`, `tds_amount`, `net_amount`) are `Decimal`, never `Float` — floating point rounding errors are unacceptable in a payment/TDS calculation path per F-13's acceptance criteria.
-- Every model has `createdAt`/`updatedAt` timestamps by convention, even if not explicitly listed in `04-architecture.md`'s compact entity view.
+- Every enum in `04-architecture.md` (e.g. `Office.setup_status`, `UtilityBill.status`, `Subscription.status`) becomes a Prisma `enum`, never a bare string column — this is what makes invalid states unrepresentable at the schema level.
+- Every foreign key that crosses an org boundary (i.e., everything except `PlatformOperator`, which deliberately carries no `org_id`) gets an index on `org_id` — dashboards in Step 09 will filter by it constantly.
+- `AuditLog` writes happen inside the same Prisma transaction as the state change they record — never as a fire-and-forget side effect (this is set up structurally now, wired into logic starting Step 03).
 
 ### ✅ Acceptance rubric
-- [ ] `schema.prisma` contains all 19 entities listed in `04-architecture.md`'s data model section.
-- [ ] `ObligationInstance.status` enum matches exactly: `expected, received, missing, in_process, closed, cancelled`.
-- [ ] `UtilityBill.status` enum matches exactly: `draft, pending_approval, approved, rejected, partially_paid, paid, overdue`.
-- [ ] All money fields (`UtilityBill.amount`, `Payment.amount`, `Payment.tds_amount`, `Payment.net_amount`, `Lease.rent_amount`) use `Decimal` type.
-- [ ] `pnpm prisma migrate dev` runs cleanly against a fresh local database with zero errors.
-- [ ] `pnpm prisma db seed` creates one Organization, one Office, and nine Users (one per role in the `User.role` enum from `04-architecture.md`).
-- [ ] Every table that should be office-scoped (UtilityAccount, Lease, MaintenanceRequest, Asset, ComplianceItem, OfficeChecklistItem) has an `officeId` foreign key with a database index.
-- [ ] Running the migration twice in a row (idempotency check) does not error or duplicate data.
+- [ ] `schema.prisma` contains all 22 entities listed in `04-architecture.md`'s data model section, field-for-field (names, types, enums, nullability match).
+- [ ] `wasp db migrate-dev` runs cleanly with zero manual SQL patches required.
+- [ ] Every entity except `PlatformOperator` has an `org_id` field or reaches `Organization` via exactly one FK hop.
+- [ ] `Subscription.org_id` is `UNIQUE` (one subscription per org), matching `04-architecture.md`.
+- [ ] All enum fields (12+ across the schema) are Prisma `enum` types, not `String`.
+- [ ] A seed script (`wasp db seed`) creates one test Organization, one Office, one User per role (9 roles), and can be re-run idempotently without duplicate-key errors.
+- [ ] Running `npx prisma studio` (or equivalent) shows all 22 tables with correct relations navigable in the UI.
+- [ ] `ObligationInstance.schedule_id`, `UtilityBill.utility_account_id`, and every other FK referenced in `04-architecture.md`'s "→ has many / → belongs to" annotations exist as real Prisma relations, not just implied by naming.
 
 ### ⚠️ Edge cases to handle
-- A migration that renames a column must be a two-step migration (add new, backfill, drop old) once real data exists — but at this stage, document this pattern now so it's followed later, not retrofitted.
-- `Landlord.bank_details` and similar `Json` fields must have an application-level shape validated at the service layer (Step 04+), since Postgres `Json` columns don't enforce structure.
+- Circular or near-circular relations (e.g. `UtilityBill` → `ObligationInstance` → `RecurringObligationSchedule` → `UtilityAccount` → `UtilityBill`) can trip Prisma's relation inference — name relation fields explicitly (`@relation("...")`) wherever Prisma's default naming is ambiguous.
+- `json` fields (`Landlord.bank_details`, `User.office_scope`) need an application-level schema (e.g. a Zod schema in `src/server/shared/`) since Prisma won't validate their shape — write it now, even though nothing reads it yet.
+- Decimal fields (`amount`, `rent_amount`, `tds_amount`) must use Prisma's `Decimal` type, not `Float` — floating point rounding on money fields is the kind of bug that surfaces as a real accounting discrepancy months later.
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't use `Float` for any money field — this WILL cause a TDS calculation mismatch in Step 09 that's painful to trace back to its root cause.
-- Don't add a Group/Organization-of-Organizations table now "to be ready for later" — `03-analysis.md` explicitly says defer the Epic 0 multi-tenant Group layer; adding it here is exactly the scope creep that analysis warns against.
-- Don't skip the seed script — Step 03's authorization tests and Step 04's onboarding flow both need realistic seed data to test against, and writing it later means retrofitting tests that should have existed from day one.
+- Don't use `Float` for any money field — Postgres `numeric`/Prisma `Decimal` is non-negotiable for a product whose Founder's Rule explicitly bars silent data errors in financial workflows.
+- Don't skip the `org_id` index — every dashboard query in Step 09 filters by organization, and an unindexed scan across 20,000 utility records (the NFR target from `07-phases.md`) will blow the 3-second load budget.
+- Don't model `RecurringObligationSchedule.scope_ref_id` / `scope_type` as a loose polymorphic pair without a comment explaining which four tables it can point to — the next engineer (or you, in six months) will not remember.
+- Don't let migrations pile up unreviewed — squash exploratory migrations into clean, named ones before this step's gate; a messy migration history becomes unreadable the moment a production rollback is needed.
 
 ### 📊 Quality bar
-- Migration applies in under 30 seconds against an empty database.
-- Seed script completes in under 10 seconds.
-- Zero `Float` fields used for money anywhere in the schema (grep-verifiable).
+- Full migration (all 22 models) applies to a fresh database in under 5 seconds.
+- `wasp db seed` completes in under 10 seconds and is fully idempotent (re-running it twice produces no duplicate rows, verified by row-count check).
+- Zero `Float` columns on any field representing currency, verified by grep across `schema.prisma`.
 
 ### 🛑 Stop and review (gate before next step)
-1. Run `pnpm prisma migrate reset` against local dev — confirm it drops, recreates, migrates, and seeds without manual intervention.
-2. Open Prisma Studio (`pnpm prisma studio`) and confirm all 19 entities are visible with correct relations.
-3. Query the seeded data for the test Organization and confirm exactly one User exists per role.
-4. Grep the schema file for `Float` — confirm zero matches on any money-related field.
+1. Drop the local database, re-run `wasp db migrate-dev` from zero, confirm it completes without manual intervention.
+2. Run `wasp db seed` twice in a row; confirm row counts in `Organization` and `User` don't double.
+3. Open Prisma Studio and manually navigate from a seeded `Office` to its `OfficeSetupProfile` to confirm the relation resolves.
+4. Grep `schema.prisma` for `Float` — confirm zero matches on any monetary field.
+5. Read through every "→ has many / → belongs to" line in `04-architecture.md`'s data model section against `schema.prisma` side by side — confirm 1:1 coverage.
 
 ---
 
-## Build Step 03 — Auth + RBAC/office-scope enforcement (F-01, F-02)
+## Build Step 03 — Auth, RBAC/office-scope, and the Platform Operator identity
 
 ### 🎯 Goal
-A user can sign up, verify email, enable MFA, and log in (F-01); every subsequent API call is checked against that user's role and office scope before any handler logic runs (F-02), and a cross-office access attempt is rejected with a 403 and logged to `AuditLog`.
+A user can sign up, verify email, enable MFA, log in, and every `query`/`action` in the app rejects a request outside the caller's role/office scope at the server layer — verified by an automated test, not a manual check.
 
-### 📍 Why this is the leaf
-This is the PRD's single loudest non-negotiable requirement, repeated in `03-analysis.md`'s risk matrix as the highest-impact tech risk. Every feature built in Steps 04-09 calls into this layer. If authorization is bolted on after features exist (the common failure mode `04-architecture.md` warns against with "no god services"), you end up with inconsistent checks scattered across a dozen controllers — exactly the trap Step 01's pitfalls section names.
+### 📍 Why this depends on Step 02
+Wasp's auth needs the `User` entity (extended in Step 02's schema) to exist before `main.wasp`'s `auth` block can reference it. RBAC/office-scope enforcement reads `User.role` and `User.office_scope`, both schema fields from Step 02. Every feature step from here forward (F-04 onward) writes operations that must pass through this gate — if the gate isn't airtight now, every later feature inherits the hole.
 
 ### 📥 Inputs (preconditions before you start)
-- Step 02 complete: `User`, `Organization`, `Office` tables exist and are seeded
-- An email-sending provider configured (even a staging/sandbox one) for verification emails
-- A TOTP library selected (e.g., `otplib`) for MFA
+- Step 02 passed: `User` model has `role` enum and `office_scope` json field, `PlatformOperator` model exists separately
+- SendGrid API key available (for verification emails) — Wasp's `emailSender` config wraps it directly
 
 ### 📤 Outputs (what exists after this step passes)
-- Working signup → email verification → MFA enrollment → login flow (F-01)
-- A NestJS guard (`AuthzGuard`) applied globally that resolves the caller's role + office scope and rejects unauthorized requests before the route handler executes (F-02)
-- Every rejected unauthorized attempt writes an `AuditLog` entry
+- Working signup → email verification → MFA enrollment → login flow at `/signup`, `/verify-email`, `/mfa-setup`, `/signin` (routes from `06-frontend.md`)
+- A `src/server/shared/authz.ts` helper — every operation in every later module imports and calls it first
+- A separate `/platform/signin` login for `PlatformOperator`, structurally isolated from the customer `User` auth flow
+- An automated authorization test suite (role × office × action) that Phase 0's exit criteria in `07-phases.md` requires
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-apps/api/src/auth/auth.controller.ts       signup, login, verify-email, mfa endpoints
-apps/api/src/auth/auth.service.ts          business logic, password hashing, session issuance
-apps/api/src/auth/mfa.service.ts           TOTP enrollment + verification
-apps/api/src/authz/authz.guard.ts          global guard: resolves role + office scope per request
-apps/api/src/authz/authz.decorator.ts      @RequiresRole(), @RequiresOfficeScope() decorators
-apps/web/app/signup/page.tsx               F-01 signup UI
-apps/web/app/mfa-setup/page.tsx            F-01 MFA enrollment UI
-apps/web/app/login/page.tsx                F-01 login UI
+main.wasp                          — auth block (Wasp email/password + verification), route/page declarations for /signup, /signin, /verify-email, /mfa-setup, /platform/signin
+src/server/auth/mfa.ts             — TOTP generation/verification (Wasp doesn't ship MFA — this is the custom layer per 04-architecture.md)
+src/server/shared/authz.ts         — assertRole(ctx, allowedRoles), assertOfficeScope(ctx, officeId) — imported by every operation from Step 04 onward
+src/server/platform/platformAuth.ts — separate session/auth path for PlatformOperator, never sharing a session type with customer User
+tests/authz.test.ts                — role × office × action matrix test, extended every later step per 07-phases.md's "Authorization test coverage" initiative
 ```
 
-**Tech decisions** (locked from blueprint stage 04):
-- Sessions, not stateless JWTs alone, for the web app — server-side session revocation is required by F-02's acceptance criteria ("revoking a user's role takes effect on their next API call, not just their next login").
-- Password hashing via a modern adaptive algorithm (argon2 or bcrypt with a sufficient cost factor) — never a fast hash like plain SHA-256.
+**Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
+- Wasp's built-in full-stack auth (email/password + verification email) handles signup/login/session issuance — do not hand-roll session management.
+- Custom TOTP MFA layered on top, mandatory for admin-tier roles per F-01's acceptance criteria — Wasp's auth has no native MFA, this module owns it entirely.
+- RBAC/office-scope checks live in every operation's server-side handler, never only in the React client — per the Founder's Rule in `01-idea.md`: "Role and office scope must be enforced at the API layer, not just hidden in the UI."
 
 **Patterns (mandatory across the codebase):**
-- `AuthzGuard` is registered globally in `apps/api/src/main.ts` — no controller opts out silently. New endpoints require an explicit `@Public()` decorator to bypass it, so the default is always "protected."
-- No route handler queries `officeId` from the request body/params without also checking it against the caller's granted office scope from `AuthzGuard` — the scope check happens in the guard, not re-implemented per-controller.
-- All authorization decisions (allow AND deny) that touch sensitive data are logged; reads emit lightweight access telemetry, writes emit full `AuditLog` entries (per the pattern noted in the source Epic 0 document).
+- Every `action`/`query` implementation's first line calls `assertRole`/`assertOfficeScope` from `src/server/shared/authz.ts` — no operation checks authorization inline with ad hoc logic.
+- Unauthorized attempts write to `AuditLog` before the request is rejected (F-02's acceptance criteria), not silently dropped.
+- `PlatformOperator` never shares a table, a session cookie, or an authz code path with customer `User` — this is what makes "`/platform` unreachable by any customer session" (F-20's first acceptance criterion) true by construction, not by a special-cased check.
 
 ### ✅ Acceptance rubric
-- [ ] User can sign up with org name, email, password; receives a verification email within 30 seconds (staging email provider).
-- [ ] Unverified accounts cannot access any `/app` route beyond the "verify your email" screen.
-- [ ] A user with an admin-tier role cannot complete signup without enrolling MFA — enforced server-side, not just hidden in the UI.
-- [ ] Login with a valid password but missing/incorrect MFA code does not issue a session.
-- [ ] A user scoped to Office A receives a 403 when calling any endpoint with an `officeId` param for Office B.
-- [ ] Each 403 from a scope mismatch produces exactly one `AuditLog` entry with `action: "unauthorized_access_attempt"`.
-- [ ] Revoking a user's role assignment (via a direct DB update in this test) causes their very next API call to fail authorization, without requiring them to log out and back in.
-- [ ] A Maker who created a bill cannot call the approve endpoint for that same bill unless the organization has an explicit override configured (test both the default-blocked and override-allowed paths).
-- [ ] Password reset invalidates all previously issued sessions for that user.
+- [ ] A test user can sign up at `/signup`, receive a verification email via SendGrid within 30 seconds, click the link, and reach a verified state (F-01).
+- [ ] An admin-tier role cannot complete signup without enabling MFA; a non-admin role can skip it (F-01).
+- [ ] Login fails closed — no session issued — on an invalid or expired MFA code (F-01).
+- [ ] A user scoped to Office A gets a 403 attempting to read or write any record scoped to Office B, tested against at least 3 different operation types (F-02).
+- [ ] Revoking a user's role blocks their very next API call, not just their next login — tested by revoking mid-session and immediately retrying a call with the old session token (F-02).
+- [ ] Every unauthorized access attempt produces an `AuditLog` row (F-02).
+- [ ] `/platform/signin` is a completely separate login; a valid customer `User` session token, when used against any `/platform/*` route, is rejected (F-20).
+- [ ] `PlatformOperator` accounts require MFA — enforced identically to admin-tier customer roles (F-20).
+- [ ] `tests/authz.test.ts` covers all 9 customer roles × representative office-scope combinations × at least 5 action types, and passes in CI.
 
 ### ⚠️ Edge cases to handle
-- User's last office scope is removed while they hold an active session — their next request must re-evaluate scope from the database, not from a cached session claim.
-- Two roles granted to one user with conflicting segregation-of-duties rules — the guard must enforce the stricter rule, never the more permissive one.
-- MFA device lost — do not build a silent bypass; require an explicit admin-assisted recovery action that itself is audit-logged.
+- A user loses their MFA device — requires an admin-assisted recovery flow (F-01's edge case), never a silent bypass; build this as an explicit admin action with its own audit entry, not a support-team database edit.
+- Concurrent signup attempts with the same email must not create two `Organization` rows — enforce with a unique constraint on `User.email`, not just application-level checking (race condition between the check and the insert).
+- A user's last office scope is removed while they hold an open session — the next request must re-evaluate scope from the database, not from a cached session claim.
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't check role/office scope only in the frontend and trust the API to "probably be fine" — this is the exact failure the 16 September demo correction and the entire PRD's Section 27 (Security NFRs) exist to prevent.
-- Don't cache a user's permissions in the session/JWT for the lifetime of the token — F-02's acceptance criteria requires revocation to take effect on the next request, which means re-checking against current DB state, not a stale cached claim.
-- Don't store the MFA secret unencrypted in the database — encrypt it at rest, same as any other credential material.
-- Don't let a single missing `@RequiresOfficeScope()` decorator on one endpoint silently fall back to "allow" — the guard's default behavior for an unannotated protected route should be to deny and log a configuration warning, not to pass through.
+- Never trust a client-supplied `officeId` or `role` without re-deriving the caller's actual scope server-side from the session — the client is not a trust boundary.
+- Don't implement MFA recovery as "an engineer manually flips a database flag" — that's an unauditable bypass on a product whose entire pitch to Finance is auditability.
+- Don't let `PlatformOperator` reuse any part of the customer auth stack "to save time" — F-20's acceptance criteria requires this isolation to be structural, and retrofitting it later means touching every `/platform/*` operation again.
+- Don't skip writing `tests/authz.test.ts` now because "the features that need it don't exist yet" — this suite is the thing every later step's rubric item ("X cannot access Y") gets verified against; write the harness now, extend it every step after.
 
 ### 📊 Quality bar
-- 100% of API endpoints (excluding explicitly `@Public()` ones) are covered by an automated authorization test asserting both an allowed and a denied case.
-- Login flow (password + MFA) completes in under 2 seconds end-to-end.
-- Zero plaintext secrets (passwords, MFA seeds) in the database — verified by inspecting the schema and a sample row.
+- Verification email delivery: under 30 seconds from signup submission (F-01's stated bar).
+- Unauthorized cross-scope request: rejected in under 200ms (no expensive lookups on the rejection path).
+- `tests/authz.test.ts` full suite: under 30 seconds runtime, run on every PR via CI.
+- Zero authorization checks implemented client-side only, verified by manually disabling JavaScript and confirming a scope violation still returns 403 from the server.
 
 ### 🛑 Stop and review (gate before next step)
-1. Sign up three different test users with different roles and office scopes. Log out. Log in as each. Confirm each sees only their own office's (still-empty) data.
-2. Attempt to call an Office B endpoint while logged in as the Office A user via a raw HTTP client (not the UI) — confirm 403 and confirm an `AuditLog` row was created.
-3. Revoke one test user's role directly in the database. Immediately retry their last successful API call — confirm it now fails.
-4. Run the full authorization test suite — confirm 100% pass, zero skipped tests.
-
-If any of these fail, do not proceed — Step 04 onward assumes this layer is airtight, and every subsequent feature's "is this secure" question depends on this gate actually holding.
+1. Sign up three different test users with three different emails, verify each, enable MFA on the admin-tier one. Log out, log in three times each. No errors.
+2. Assign two users to different offices. Attempt a cross-office read/write from each against the other's office — confirm both get 403 and both attempts appear in `AuditLog`.
+3. Revoke one user's role mid-session; immediately retry a call with their old, still-technically-valid session token — confirm it's rejected.
+4. Attempt to reach any `/platform/*` route using a valid customer session token — confirm rejection.
+5. Run `tests/authz.test.ts` — confirm 100% pass and review the matrix for gaps against the 9-role list in `04-architecture.md`.
 
 ---
 
-## Build Step 04 — Org/Office hierarchy + Guided Onboarding (F-03, F-04, F-05)
+## Build Step 04 — Onboarding core: organization, office, guided checklist
 
 ### 🎯 Goal
-An Admin can create an office and complete the full guided onboarding wizard (Owned/Rented → Utilities → Facilities → Compliance → Vendors → Assets → Roles → Review) and activate the office, without ever seeing a generic expense form.
+An Office Admin can create an organization, add an office, walk the guided onboarding wizard across all six categories, and activate the office — with Setup Completion % accurate at every step (F-03, F-04, F-05).
 
-### 📍 Why this is the leaf
-This is the product's core differentiator per `02-research.md` and `03-analysis.md` — it's what makes AddMin "obligation-first, not expense-first." Steps 05-08 all attach their setup flows into this checklist (e.g., marking a utility "Yes" in Step 04 must create the actual `UtilityAccount` record built in Step 07).
+### 📍 Why this depends on Step 03
+Every onboarding operation is office-scoped and role-gated by Step 03's `authz.ts`. The onboarding wizard is also the first place a real user-facing flow exists — it's the anchor every later domain feature (utility, lease, vendor, compliance) plugs its "Yes" branch into, per F-04's user flow ("Selecting 'Yes' on a utility immediately creates a setup task and links to F-06").
 
 ### 📥 Inputs (preconditions before you start)
-- Step 03 complete: a logged-in, MFA-verified Admin session exists
-- `OfficeChecklistTemplate` seed data defined for Utilities, Facilities, Compliance categories (per the PRD's Section 5 checklist content: Electricity/Water/Internet/Telephone/Gas/DG/UPS/Solar for utilities; Trade Licence/Fire NOC/Electrical Safety/Shop & Establishment/Lift Licence/Pollution Certificate for compliance)
+- Step 03 passed: auth + authz test suite green
+- `OfficeChecklistTemplate` seed content drafted — the actual list of utility/facility/compliance/vendor/asset/role items an office is checked against (content ownership: product/founder, not engineering — don't invent this list ad hoc)
 
 ### 📤 Outputs (what exists after this step passes)
-- `POST /api/organizations`, `POST /api/offices` working end-to-end (F-03)
-- Full onboarding wizard UI at `/app/onboarding` per the route/wireframe in `06-frontend.md` (F-04)
-- Setup Completion % calculation and Activate Office action at `/app/offices/[officeId]/setup` (F-05)
+- Working routes: `/app/offices`, `/app/offices/new`, `/app/offices/[officeId]`, `/app/offices/[officeId]/setup`, `/app/onboarding`
+- `createOrganization`, `createOffice`, `getOfficeChecklist`, `updateChecklistItem`, `activateOffice` operations declared in `main.wasp` and callable from React via `useQuery`/action imports
+- A real office can go from `draft` → `active` status through the UI, with Setup Completion % recalculating live
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-apps/api/src/organization/organization.service.ts
-apps/api/src/office/office.service.ts               office CRUD + setup_status transitions
-apps/api/src/onboarding/onboarding.service.ts        checklist state, completion % calc
-apps/api/src/onboarding/checklist-template.seed.ts   seeded checklist items
-apps/web/app/onboarding/page.tsx                     wizard shell (<WizardStepper>)
-apps/web/app/onboarding/steps/*.tsx                  one file per step
-apps/web/app/offices/[officeId]/setup/page.tsx        completion % + activate
+main.wasp                              — add pages/routes for /app/offices*, /app/onboarding; declare createOrganization, createOffice, getOfficeChecklist, updateChecklistItem, activateOffice
+src/server/organization/office.ts      — createOrganization, createOffice implementations
+src/server/onboarding/checklist.ts     — getOfficeChecklist, updateChecklistItem, completion % calculation
+src/server/onboarding/activation.ts    — activateOffice, with the "every applicable Yes/Available item has configured status or owner" gate from F-05
+src/client/onboarding/Wizard.tsx       — <WizardStepper> shell, one step component per category
+src/client/offices/OfficeList.tsx      — /app/offices list view with setup_status badges
+seed/checklistTemplates.ts             — the actual OfficeChecklistTemplate content (utilities, facilities, compliance, vendor, asset, role items)
 ```
 
-**Tech decisions:**
-- Checklist template is seeded data (`OfficeChecklistTemplate`), not hard-coded in frontend components — per F-04's acceptance criteria, this must be configurable, and the PRD explicitly flags jurisdiction-specific compliance applicability as requiring future configuration.
-- Setup Completion % is calculated server-side on every checklist mutation, never computed client-side from potentially stale data.
+**Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
+- Onboarding state lives in `OfficeChecklistItem` rows, not client-side form state — F-04's edge case ("admin abandons onboarding mid-flow — checklist state persists exactly where they left off") requires server persistence per step, not a single final submit.
 
 **Patterns (mandatory across the codebase):**
-- Every wizard step component receives `officeId` and reads/writes exactly one category of `OfficeChecklistItem` — no step reaches across category boundaries.
-- Marking a checklist item "Yes"/"Available" without completing its linked configuration must create a visible open task, per F-04 — implement this as a computed `status` derivation, not a separate manually-maintained flag.
+- Setup Completion % is always computed server-side inside `getOfficeChecklist`, never in the React client — the formula (completed applicable items ÷ total applicable items, excluding Not Applicable) lives in exactly one place.
+- Every wizard step's `updateChecklistItem` call is a discrete action, not a batched final-submit — this is what makes "resume exactly where you left off" true.
 
 ### ✅ Acceptance rubric
-- [ ] User can create an office and complete guided setup without creating any generic expense category or payee (F-04 core acceptance criterion from the PRD).
-- [ ] Every checklist item supports exactly the applicability values specified (Yes/No/Not Applicable, or Available/Missing/Not Applicable for compliance).
-- [ ] Marking a utility "Yes" without completing connection details shows it as an open item on the Review step.
-- [ ] Setup Completion % = completed applicable items ÷ total applicable items; marking an item Not Applicable removes it from both numerator and denominator, verified by a direct calculation test with mixed applicability states.
-- [ ] Saving the wizard mid-flow and returning later resumes at the exact step and field state where the user left off.
-- [ ] "Activate Office" is disabled while any applicable item lacks a configured status or assigned owner, and the disabled state names which items are blocking.
-- [ ] Activating an office sets `setup_status = active`, records `activated_at`/`activated_by`, and is a single explicit user action, never automatic.
+- [ ] User can create an organization and an office with all mandatory fields validated before save (F-03).
+- [ ] A newly created office defaults to `setup_status = draft`, confirmed by direct DB read after creation (F-03).
+- [ ] Every checklist item supports Yes/No/Not Applicable (or Available/Missing/Not Applicable for compliance) as required by F-04.
+- [ ] Marking an item "Yes" but leaving it unconfigured shows up as an open action item, verified by checking `/app/my-actions` after marking (F-04 — My Actions itself lands in Step 09, but the underlying open-item state must exist now).
+- [ ] Setup Completion % recalculates immediately (sub-second) whenever a checklist item's status changes, verified by watching the UI update without a page reload (F-05).
+- [ ] "Activate Office" is disabled until every applicable Yes/Available item has configured status or an assigned owner — attempt activation with one item left unconfigured and confirm it's blocked with a specific message (F-05).
+- [ ] Activating an office records `activated_at` and `activated_by`, verified by DB read (F-05).
+- [ ] Abandoning the wizard mid-step and returning later resumes at the exact same step with prior selections intact (F-04's edge case).
+- [ ] CSV bulk office import validates each row independently and reports per-row errors without failing the whole batch (F-03).
 
 ### ⚠️ Edge cases to handle
-- Admin changes a utility from "Yes" (with data already entered) to "Not Applicable" — show a confirmation before discarding the linked `UtilityAccount` draft, don't silently delete it.
-- Admin abandons the wizard entirely and returns days later — checklist state must be exactly as they left it, not reset or partially expired.
-- All items marked Not Applicable — completion is mathematically 100%, but activation is still a required explicit click, not automatic.
+- Admin marks a utility "Not Applicable" after previously marking it "Yes" with linked data already entered (e.g. a UtilityAccount created) — warn before discarding, per F-04's edge case; don't cascade-delete silently.
+- All checklist items marked Not Applicable — completion shows 100%, but "Activate Office" is still an explicit, required click, never automatic (F-05).
+- CSV import with a duplicate office code — reject that row with a specific error, let the rest of the batch import (F-03).
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't hard-code the checklist item list in a frontend array — this contradicts F-04's configurability requirement and means every new customer's jurisdiction-specific compliance needs requires a code deploy instead of a data change.
-- Don't compute Setup Completion % on the frontend from data that might be stale after a concurrent update — always fetch the authoritative percentage from the API after any mutation.
-- Don't let "Activate Office" succeed silently when dependencies are missing — the PRD is explicit that a workflow must not be able to execute if its mandatory dependency (e.g., no approver) is absent; catch this at activation time, not only at first use.
+- Don't compute Setup Completion % in the React component — a formula duplicated between client and server drifts the first time someone tweaks it in only one place.
+- Don't let "Activate Office" become implicit (e.g. auto-activating at 100% completion) — F-05 explicitly requires it be a deliberate, separately-clicked action, and the acceptance criteria test for this directly.
+- Don't hardcode the checklist template content directly into the wizard's React components — it belongs in `OfficeChecklistTemplate` seed data so it can be edited without a redeploy, since `07-phases.md` calls onboarding checklist accuracy a continuous, ongoing initiative.
+- Never let office activation depend on `Subscription.status` — F-05's user flow is explicit: "this is never blocked by billing/subscription status... a trialing org has full functional access." Billing gating belongs entirely in Step 05, not here.
 
 ### 📊 Quality bar
-- Wizard step transitions render in under 300ms (no full-page reload between steps).
-- Onboarding completion (11 steps) is achievable by a test user in under 10 minutes of active interaction.
+- Checklist state save (`updateChecklistItem`): round-trip under 500ms.
+- Setup Completion % recalculation: reflected in UI within 1 second of the underlying item change.
+- CSV bulk import: 100 rows processed in under 5 seconds with per-row error reporting.
 
 ### 🛑 Stop and review (gate before next step)
-1. Create a new office as a test Admin. Walk through the entire wizard, marking a mix of Yes/No/Not Applicable across categories. Save and log out mid-way through.
-2. Log back in, confirm the wizard resumes exactly where you left off.
-3. Complete the remaining steps, attempt to activate with one utility left unconfigured — confirm activation is blocked and the specific item is named.
-4. Fix the blocking item, activate — confirm `setup_status` is `active` and the activation timestamp/user is recorded correctly in the database.
+1. Create an organization and an office end to end through the UI; confirm `setup_status = draft` in the database immediately after.
+2. Walk the full onboarding wizard for one office across all six categories, closing the browser tab mid-way through the Compliance step, then reopening — confirm it resumes exactly there.
+3. Leave one mandatory item unconfigured and attempt "Activate Office" — confirm it's blocked with a message naming the specific missing item.
+4. Configure every item, activate the office, and confirm `activated_at`/`activated_by` are set correctly in the database.
+5. Import a CSV with one duplicate office code among five valid rows — confirm four import successfully and one reports a specific per-row error.
 
 ---
 
-## Build Step 05 — Free Trial & Subscription Activation (F-19)
+## Build Step 05 — Billing & Subscription: Stripe Checkout, webhook, and the Platform Operator console
 
 ### 🎯 Goal
-A visitor who clicks "Start Free Trial" on the marketing site lands in a 14-day trial the moment their account is created (Step 03), completes Guided Onboarding (Step 04) with no payment method required, and can activate a paid subscription from `/app/subscribe` at any point — with the org's access correctly gated once the trial ends without a chosen plan.
+A visitor can sign up, get a 14-day trial with zero payment method required, use the product fully during the trial, and convert to paid through Stripe Checkout — with the Platform Operator able to manually set any org's plan/status from `/platform/organizations` (F-19, F-20).
 
-### 📍 Why this is the leaf
-This step exists because the marketing site's primary conversion path (`addmin-site/content/_index.md`, `pricing.md`, `hugo.toml`) now sends every "Start Free Trial" click straight into the product, not into a sales form. That marketing promise — register → onboard → subscribe — has to be a real, gated sequence in the product, not just landing-page copy. Step 07 onward assumes an `Organization` has a resolved subscription/trial state; without this step, there is no server-side answer to "is this org allowed to keep using AddMin," which becomes a real question the moment a trial expires.
+### 📍 Why this depends on Step 04
+`Subscription` is created at signup (Step 03's auth flow) but the "sales-assisted Enterprise" alternate path and the self-serve `/app/subscribe` flow both need a functioning office/onboarding flow to route a converting trial user back into — F-19's user flow explicitly routes activation-triggered subscribe prompts through Step 04's `activateOffice`. This step is pulled forward ahead of most domain features per `07-phases.md`'s Decision 6: the marketing site's "Start Free Trial" CTA makes a promise the product can't keep without it.
 
 ### 📥 Inputs (preconditions before you start)
-- Step 03 complete: signup creates an `Organization` + first `User` and issues a session
-- Step 04 complete: an office can be onboarded and activated
-- A billing provider account for AddMin's own SaaS billing (e.g., Stripe or Razorpay) — separate account and integration from the customer-facing Payment Gateway referenced in `04-architecture.md`, which is P1 and pays *the customer's* vendors/landlords, not AddMin's own subscription revenue
-- The three plans and prices from `addmin-site/content/pricing.md` (Starter ₹15,000, Growth ₹25,000, Enterprise custom) as the source of truth for plan definitions
+- Step 04 passed: office activation flow working
+- Stripe account with Checkout + Customer Portal enabled, test-mode API keys acquired, three Products/Prices created matching Starter/Growth/Enterprise plans from `09-marketing-website.md`'s pricing page
+- A Stripe CLI or ngrok tunnel for local webhook testing
 
 ### 📤 Outputs (what exists after this step passes)
-- `Organization` gets a `Subscription` record the instant signup completes, in `trialing` status, with `trial_ends_at` set to 14 days out
-- `/app/subscribe` page where an Org Admin selects a plan and enters a payment method to transition `Subscription.status` from `trialing`/`past_due` to `active`
-- A nightly job that flags trials nearing expiry, flags expired unconverted trials, and restricts access accordingly
-- The marketing site's `?plan=starter` / `?plan=growth` query param (from `pricing.md`'s CTA buttons) pre-selects that plan on `/app/subscribe`, without forcing payment before trial start
+- `/app/subscribe` working end-to-end against real (test-mode) Stripe Checkout
+- `POST /payments-webhook` raw Wasp `api` route, signature-verified, idempotently updating `Subscription.status`
+- `/platform/organizations` and `/platform/organizations/[orgId]` working for Platform Operators, isolated from customer sessions (built on Step 03's separate `PlatformOperator` auth)
+- A nightly Wasp `job` flagging trials nearing expiry and transitioning expired ones (first background job in the system — sets the pattern Step 06 extends)
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-apps/api/src/billing/subscription.service.ts         plan/trial/subscription state machine
-apps/api/src/billing/billing-provider.adapter.ts      wraps Stripe/Razorpay SDK behind one interface
-apps/api/src/billing/jobs/trial-expiry.job.ts         nightly: flag expiring/expired trials
-apps/web/app/signup/page.tsx                          reads ?plan= param, passes through to onboarding then subscribe
-apps/web/app/subscribe/page.tsx                       plan selection + payment method capture
+main.wasp                                  — add getSubscription query, subscribeToPlan action, POST /payments-webhook api route (raw, no auth middleware), listOrganizationsInternal/setTenantStatusInternal/setSubscriptionInternal actions gated to PlatformOperator, nightly trialExpiryJob
+src/server/billing/subscription.ts         — getSubscription, subscribeToPlan (creates Stripe Checkout session)
+src/server/billing/webhook.ts              — POST /payments-webhook handler: verifies Stripe signature, updates Subscription idempotently
+src/server/billing/trialExpiryJob.ts       — nightly job: 3-day/1-day reminders, expires trials past trial_ends_at, reconciles against Stripe
+src/server/platform/console.ts             — listOrganizationsInternal, setTenantStatusInternal, setSubscriptionInternal
+src/client/subscribe/SubscribePage.tsx     — /app/subscribe: plan cards, trial banner, redirects to Stripe Checkout
+src/client/platform/OrgList.tsx            — /platform/organizations
+src/client/platform/OrgDetail.tsx          — /platform/organizations/[orgId]
 ```
 
-**Tech decisions** (locked from blueprint stage 04 — extend, do not re-litigate the core stack):
-- `Subscription` is a new entity, org-scoped, independent of the `Payment` entity from `04-architecture.md` — the two must never share a table or service, since one is AddMin's revenue and the other is the customer's own vendor/rent payments.
-- Billing provider access goes through `BillingProviderAdapter`, never called directly from `SubscriptionService` — this mirrors the "no god services" rule from `04-architecture.md` and keeps a Stripe-to-Razorpay swap (or vice versa) contained to one file.
-- No card/payment credential data is ever stored in AddMin's own database — only the billing provider's customer/subscription reference IDs, consistent with the PCI-DSS constraint already stated in `04-architecture.md`'s NFRs.
+**Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
+- Stripe Checkout + Customer Portal for AddMin's own SaaS billing — this is entirely separate from the P1 Payment Gateway (Razorpay) that tracks the customer's *own* vendor/rent payments; never let these two concerns share a module or a mental model.
+- The webhook is a raw Wasp `api` route (`POST /payments-webhook`), not a `query`/`action` — Stripe calls it unauthenticated and needs a real HTTP endpoint Wasp's typed RPC layer doesn't provide.
+- Webhook processing must be idempotent and reconciled nightly against Stripe's own subscription records, per `04-architecture.md` — "a missed webhook self-heals on the next run."
 
 **Patterns (mandatory across the codebase):**
-- Every `@RequiresRole()`-protected route added in this step additionally checks `Subscription.status` via a `SubscriptionGuard` layered on top of Step 03's `AuthzGuard` — role/office authorization and billing-status authorization are two separate concerns, never merged into one check.
-- Trial and subscription state transitions go through a single `SubscriptionService.transitionStatus()` method (`trialing → active`, `trialing → expired`, `active → past_due → active`, `active → canceled`) — no controller sets `Subscription.status` directly, mirroring the pattern already established for `ObligationInstance` and `UtilityBill` status.
-- Onboarding (Step 04) and office activation are never blocked by subscription status — a trialing org has full functional access; only continued access *after* trial expiry without a plan is gated.
+- The webhook handler verifies Stripe's signature (`stripe.webhooks.constructEvent` with `STRIPE_WEBHOOK_SECRET`) before touching anything — reject unsigned or mis-signed payloads immediately with a 400.
+- Every `Subscription` status transition, whether from the webhook, `/app/subscribe`, or the Platform Operator console, writes an `AuditLog` entry, per F-19 and F-20's acceptance criteria.
+- Platform Operator operations use a distinct authz check (`assertPlatformOperator`, separate from `assertRole`) — they are the one deliberate place in the system that crosses org boundaries, and that exception must be visible in the code, not implicit.
 
 ### ✅ Acceptance rubric
-- [ ] Completing signup (Step 03) creates exactly one `Subscription` in `trialing` status with `trial_ends_at` = signup time + 14 days, with no payment method required.
-- [ ] A user can complete the entire Guided Onboarding wizard (Step 04) and activate an office while `Subscription.status` is `trialing`, with zero billing prompts interrupting that flow.
-- [ ] Visiting `/signup?plan=growth` (matching the marketing site's pricing-page CTA) pre-selects the Growth plan on `/app/subscribe` without charging the card until the user explicitly confirms.
-- [ ] Submitting valid payment details on `/app/subscribe` transitions `Subscription.status` to `active` and is reflected within 5 seconds, verified against the billing provider's own dashboard/webhook.
-- [ ] The nightly trial-expiry job sends a reminder notification at 3 days and 1 day before `trial_ends_at`.
-- [ ] An org whose trial expires with `Subscription.status` still `trialing` (no plan chosen) transitions to `expired`, and subsequent API calls for that org are blocked by `SubscriptionGuard` with a clear "trial expired — choose a plan" response, distinct from a 403 authorization failure.
-- [ ] A failed payment method on `/app/subscribe` shows a specific billing-provider error message and does not leave `Subscription.status` in an ambiguous intermediate state.
-- [ ] Every subscription status transition produces an `AuditLog` entry, consistent with every other state-changing action in the product.
+- [ ] Signup creates a `Subscription` in `trialing` status with `trial_ends_at` 14 days out and zero payment method required (F-19).
+- [ ] A trialing org has full functional access to onboarding and office activation — subscription status never blocks it (F-19, cross-checked against Step 04).
+- [ ] `/signup?plan=growth` pre-selects the Growth plan on `/app/subscribe` without charging until explicit confirmation (F-19).
+- [ ] Submitting valid Stripe test-mode payment details transitions `Subscription.status` to `active` within 5 seconds, and that transition is confirmed by the webhook firing, not just the client-side redirect (F-19).
+- [ ] Sending a Stripe webhook event twice (simulate via Stripe CLI replay) does not create a duplicate status transition or double-fire any downstream notification.
+- [ ] Reminder jobs fire at 3 days and 1 day before `trial_ends_at`, verified by manually setting a test org's `trial_ends_at` to trigger each window and checking `NotificationLog`.
+- [ ] An org whose trial expires with no plan chosen is gated to a "choose a plan" screen on next access — verified by fast-forwarding a test org's `trial_ends_at` into the past.
+- [ ] A Platform Operator can set a test org's `Subscription` to `active` directly from `/platform/organizations/[orgId]` — the customer's next login sees `active` status with no special-casing visible to them (F-20).
+- [ ] A Platform Operator suspending an org's `tenant_status` blocks every subsequent API call for that org's users immediately, independent of `Subscription.status` (F-20).
+- [ ] Every Subscription/tenant-status change from any path produces a correctly-attributed `AuditLog` entry (F-19, F-20).
 
 ### ⚠️ Edge cases to handle
-- Billing provider webhook for a successful payment arrives before the user's browser redirect back from `/app/subscribe` completes — `SubscriptionService` must be idempotent on webhook receipt, not dependent on the browser-side confirmation as the source of truth.
-- An org's card is charged successfully but the webhook delivery fails/is delayed — reconcile via a periodic poll against the billing provider, don't leave the org incorrectly gated as `expired` due to a missed webhook.
-- A user starts a trial, completes onboarding, and never returns until after `trial_ends_at` — on their next login, they land on `/app/subscribe` immediately, not on a broken or blank Office Home.
-- Enterprise-tier prospects (from `pricing.md`'s "Contact Sales" path) don't go through this self-serve flow at all — an org created via a sales-assisted process can have its `Subscription` set directly to `active` with a manually agreed plan, bypassing the trial state entirely.
+- Stripe's webhook can arrive before or after the browser redirect from `/app/subscribe` completes — the status transition logic must be idempotent regardless of arrival order (F-19's stated edge case); test by artificially delaying the webhook in a local run.
+- A payment method fails during confirmation — the org stays correctly in `trialing` (or `past_due` if already active), never in an ambiguous state (F-19).
+- Two Platform Operators edit the same org concurrently — the console should warn on stale data (optimistic concurrency check) rather than silently overwrite, per F-20's edge case.
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't gate onboarding (Step 04) behind requiring a payment method — this directly contradicts the marketing site's stated promise ("no card required" on `pricing.md`'s FAQ) and will show up as a broken funnel the first time a real prospect clicks "Start Free Trial."
-- Don't store raw card numbers or CVV anywhere in AddMin's own database "temporarily" — this is a PCI-DSS violation from the first commit, not just a later cleanup item.
-- Don't conflate this subscription/billing gate with Step 03's `AuthzGuard` role/office checks — a user can be perfectly authorized by role and office scope and still be correctly blocked because their org's trial expired; these are independent gates that must both pass.
-- Don't trust the billing provider's client-side SDK confirmation alone to mark a subscription active — always confirm via the authoritative server-to-server webhook or API callback, since client-side confirmation can be spoofed or can fail silently after actually succeeding on the provider's side.
+- Don't trust the client-side Stripe Checkout redirect as proof of payment — F-19's acceptance criteria is explicit: confirmation must come from the webhook, not client-side state alone. A user can close the tab before redirect completes; only the webhook is authoritative.
+- Never process a webhook payload before verifying its signature — an unverified webhook endpoint is an open door for anyone to fake a "payment succeeded" event and get free access.
+- Don't let `STRIPE_API_KEY` or `STRIPE_WEBHOOK_SECRET` live anywhere but `.env.server` / Fly.io secrets — same rule as Step 01, repeated here because billing secrets are the highest-value leak in the whole system.
+- Don't conflate this Billing & Subscription module with the future P1 Payment Gateway module — they will eventually both involve "payment," but one charges AddMin's customer for AddMin, the other executes the customer's own vendor payments; keep the code, the entities, and the mental model separate now so P1 doesn't require an untangling refactor.
 
 ### 📊 Quality bar
-- Trial-to-active conversion completes end-to-end (`/app/subscribe` submit → `Subscription.status = active`) in under 5 seconds under normal billing-provider latency.
-- Zero raw payment credential fields present anywhere in AddMin's own schema (grep-verifiable, same standard as Step 02's `Float`-for-money check).
-- Trial-expiry job correctly classifies 100% of trialing orgs against their exact `trial_ends_at` timestamp in a seeded test set spanning past, today, and future expiry dates.
+- Checkout session creation to Stripe redirect: under 2 seconds.
+- Webhook processing (signature verify + DB update): under 500ms.
+- Nightly trial-expiry job: completes for up to 1,000 orgs in under 30 seconds.
+- Zero webhook events processed without a valid signature, verified by sending one deliberately mis-signed test payload and confirming a 400 with no state change.
 
 ### 🛑 Stop and review (gate before next step)
-1. Sign up as a new test org via the marketing site's actual "Start Free Trial" link (or its `/signup?plan=starter` equivalent). Confirm a `trialing` `Subscription` exists with no payment method captured.
-2. Complete the full onboarding wizard from Step 04 and activate an office — confirm nothing in that flow prompted for billing.
-3. Go to `/app/subscribe`, confirm the plan pre-selected from the signup URL matches, submit a test payment method, and confirm `Subscription.status` flips to `active` and an `AuditLog` entry is recorded.
-4. Manually backdate a second test org's `trial_ends_at` into the past and run the trial-expiry job — confirm that org's subsequent API calls are blocked with the specific "trial expired" response, not a generic 403 or a silent pass-through.
+1. Sign up a fresh test org, confirm `Subscription.status = trialing`, `trial_ends_at` 14 days out, and full onboarding access with no payment prompt blocking anything.
+2. Complete `/app/subscribe` with a Stripe test card, confirm `active` status appears within 5 seconds and is corroborated by the webhook log, not just the redirect.
+3. Use the Stripe CLI to replay the same webhook event twice — confirm no duplicate state change or duplicate notification.
+4. Log into `/platform/organizations`, manually set a second test org to `active`, then suspend a third org's `tenant_status` — confirm the suspended org's users are immediately blocked on their next API call.
+5. Attempt to reach any `/platform/*` route with a customer session token (repeat of Step 03's check, now against real billing data) — confirm rejection.
 
 ---
 
-## Build Step 06 — Platform Operator Console (F-20)
+## Build Step 06 — Obligation Engine and background jobs (Utility core)
 
 ### 🎯 Goal
-A Platform Operator — an AddMin-internal identity, never a customer role — can log into a separate `/platform` login, see every customer Organization with its plan/Subscription/tenant status, and manually activate a Subscription or suspend/reactivate a tenant; no customer-scoped session can reach any of it.
+A Utility connection created in the product generates a `RecurringObligationSchedule`, the nightly job produces the next `ObligationInstance` ahead of its expected date, and a missed one is automatically flagged — proving the core "obligation-first, not expense-first" differentiator end to end (F-06, F-07, F-08).
 
-### 📍 Why this is the leaf
-F-19's own alternate flow (the sales-assisted Enterprise/design-partner path) already assumes someone inside AddMin can set a `Subscription` to `active` outside the self-serve flow — Step 05 built the state machine but nothing that lets a human actually drive it for that case. This step is intentionally small: per `03-analysis.md`'s scoping decision, it implements a single internal role with cross-org read/write on two fields, not Epic 0's full Group hierarchy, Membership abstraction, permission catalogue, or break-glass consent flow. Steps 07 onward don't depend on this one technically, but it must exist before Phase 2's first sales-assisted pilot organization is onboarded (per `07-phases.md`).
+### 📍 Why this depends on Step 05
+The Obligation Engine is shared infrastructure that Lease (Step 08), AMC (Step 08), and Compliance (Step 08) all build on — get its scheduling/generation/missing-flag logic right once here against the simplest case (utility bills) before three more domains depend on it. It also introduces `pg-boss`-backed Wasp `job` declarations for the first time since the trial-expiry job in Step 05; this step establishes the pattern (idempotent nightly runs, `entities` declared in `main.wasp`) that every later background job reuses.
 
 ### 📥 Inputs (preconditions before you start)
-- Step 02 complete: the 19 core entities are already migrated and seeded (per this repo's own history — `d992408`)
-- Step 05 complete: `Subscription` exists and its state machine (`trialing → active → past_due → expired → canceled`) works
-- Step 03 complete: `AuthzGuard` and the audit-logging pattern are established — this step reuses both patterns for a new, deliberately separate identity type
+- Step 05 passed: billing flow working, first Wasp `job` (trial expiry) proven in production
 
 ### 📤 Outputs (what exists after this step passes)
-- An **additive** migration adding `tenant_status` (enum: `active`, `suspended`, default `active`) to `Organization`, and a new `PlatformOperator` table — entirely separate from the customer `User` table, per `04-architecture.md`'s data model
-- `/platform/signin`, `/platform/organizations`, `/platform/organizations/[orgId]` frontend routes, reachable only by a `PlatformOperator` session
-- `GET /internal/organizations`, `PATCH /internal/organizations/:id/tenant-status`, `PATCH /internal/organizations/:id/subscription` API endpoints, gated by a new `PlatformOperatorGuard` distinct from Step 03's `AuthzGuard`
-- A `TenantStatusGuard` check layered into the existing request pipeline: a `suspended` org's API calls are rejected regardless of role, office scope, or subscription status
+- `/app/utilities`, `/app/utilities/new`, `/app/utilities/[id]` working
+- A nightly `job` that generates `ObligationInstance` rows ahead of `expected_date` for every active `RecurringObligationSchedule`
+- A nightly `job` that flags overdue-with-no-linked-record instances as `Missing` and notifies the Office Admin
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-packages/db/prisma/migrations/<timestamp>_add_platform_operator/   additive migration — do not touch the Step 02 migration
-apps/api/src/platform-ops/platform-operator-auth.service.ts        separate login/session issuance for PlatformOperator
-apps/api/src/platform-ops/platform-operator.guard.ts                rejects any request without a valid PlatformOperator session
-apps/api/src/platform-ops/tenant-status.guard.ts                    rejects any request where Organization.tenant_status = suspended
-apps/api/src/platform-ops/platform-organizations.service.ts         cross-org list/read/write on Organization + Subscription
-apps/web/app/platform/signin/page.tsx
-apps/web/app/platform/organizations/page.tsx
-apps/web/app/platform/organizations/[orgId]/page.tsx
+main.wasp                                   — createUtilityAccount, listUtilityAccounts actions/queries; obligationGenerationJob, missingBillAlertJob (both cron, entities: [RecurringObligationSchedule, ObligationInstance, ...] declared explicitly)
+src/server/utility/account.ts               — createUtilityAccount (also creates the RecurringObligationSchedule), listUtilityAccounts
+src/server/obligation/schedule.ts           — shared schedule creation/update logic, reused by Lease/Vendor/Compliance in Step 08
+src/server/obligation/generationJob.ts      — nightly instance generation, idempotent per schedule+period
+src/server/obligation/missingAlertJob.ts    — nightly missing-item scan + notification
+src/server/notification/sender.ts           — thin wrapper around Wasp's SendGrid-backed emailSender, reused by every notification-firing job from here on
 ```
 
-**Tech decisions** (locked from blueprint stage 04 — extend, do not re-litigate the core stack):
-- `PlatformOperator` is its own table with its own session/login flow, never a row in `User` with a special role flag — this mirrors Epic 0's actual design (a platform-level identity is not a Membership of any org) and, more practically, makes it structurally impossible for a customer-side privilege escalation bug to ever grant Platform Operator access, since the two tables share no schema.
-- `TenantStatusGuard` runs independently of and in addition to Step 03's `AuthzGuard` and Step 05's `SubscriptionGuard` — three separate gates (authorization, billing, tenant status), each with its own single responsibility, none merged into a combined mega-check.
-- The `/platform` route tree is never linked from the customer `Web App` — no shared layout, no shared nav component, so there is no accidental code path from a customer session into a Platform Operator page.
+**Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
+- Wasp `job` declarations executed by `pg-boss` on the same Postgres database — no Redis, no separate worker deployment, per `04-architecture.md`.
+- `pg-boss` persists jobs as rows and survives restarts — this is what makes retry-with-backoff behavior possible without extra infrastructure.
 
 **Patterns (mandatory across the codebase):**
-- Every `/internal/*` endpoint requires `PlatformOperatorGuard` explicitly — there is no global default that could accidentally expose one, mirroring Step 03's "protected by default" rule but for a completely separate identity space.
-- Every write from `platform-organizations.service.ts` produces an `AuditLog` entry tagged with the acting `PlatformOperator`'s id, using the exact same Audit Module as every other write in the system — there is no separate, weaker audit path for internal tooling.
-- `Organization.tenant_status` is changed only through `PlatformOperationsModule` — no other module ever writes this field, so `grep`ing for writes to `tenant_status` should return exactly one call site.
+- Every Wasp `job` declares its `entities` in `main.wasp` explicitly — a job that touches a Prisma model without declaring it there fails at runtime with a confusing error, not a compile error (this is the single most common Wasp mistake — call it out in code review every time).
+- Every nightly job is written to be idempotent per (schedule_id, period) or equivalent natural key — a missed or re-run night must not create duplicate instances.
+- Notification-sending jobs log to `NotificationLog` with a last-notified timestamp, so a retried job never double-sends.
 
 ### ✅ Acceptance rubric
-- [ ] The additive migration runs cleanly on top of the existing Step 02 migration history with zero changes to already-applied migration files.
-- [ ] A valid customer `User` session (any role, including the org-scoped "Platform Administrator") receives a 403 when calling any `/internal/*` endpoint or loading `/platform/*` — verified with a direct test using a real customer session token.
-- [ ] `/platform/organizations` lists every seeded Organization with correct plan, Subscription status, and tenant_status.
-- [ ] Setting a Subscription to `active` with a chosen plan through `/platform/organizations/[orgId]` produces the identical state as F-19's self-serve `/app/subscribe` path — verified by checking the customer's next `/app` load sees no special-casing.
-- [ ] Suspending an org's `tenant_status` causes every subsequent API call from that org's users to fail, even for an org whose `Subscription.status` is `active` — tested by suspending a test org with an active subscription and confirming access is still blocked.
-- [ ] Reactivating a suspended org restores access on its very next API call, with no re-login required by the affected customer users.
-- [ ] Every tenant-status or subscription change made via `/platform` produces an `AuditLog` entry identifying the acting `PlatformOperator`, distinguishable from customer-side audit entries.
-- [ ] `PlatformOperator` accounts require MFA before they can access `/platform/organizations`.
+- [ ] Creating a utility connection with provider, account/meter number, and billing cycle as mandatory fields also creates/activates a `RecurringObligationSchedule` (F-06).
+- [ ] A single office can have multiple connections of the same utility type (F-06).
+- [ ] Every active `UtilityAccount` has exactly one `RecurringObligationSchedule` (F-07).
+- [ ] Manually triggering the generation job produces an `ObligationInstance` with `status = expected` ahead of `expected_date`, confirmed by checking the date math (F-07).
+- [ ] Running the generation job twice in a row for the same period does not create a duplicate instance (F-07's idempotency requirement).
+- [ ] Deactivating a `UtilityAccount` stops future instance generation without deleting historical instances (F-07).
+- [ ] An instance past its expected receipt window with nothing linked automatically transitions to `Missing` and creates a notification, verified by manually backdating a test instance's `expected_date` and running the job (F-08).
+- [ ] Waiving a Missing item requires a remark and is recorded in `AuditLog` (F-08).
+- [ ] Missing items unresolved past a configurable threshold escalate to Office Head, verified with a test instance aged past the threshold (F-08).
 
 ### ⚠️ Edge cases to handle
-- A Platform Operator suspends an org mid-trial — `trial_ends_at` and `Subscription.status` are untouched; suspension is orthogonal, so reactivating returns the org to exactly the trial/subscription state it had before suspension.
-- Two Platform Operators edit the same org concurrently — the later write wins and is fully audited, but the UI should surface a "this record changed since you loaded it" warning rather than silently overwriting.
-- A suspended org's user attempts to log in — they see a specific "your organization's access has been suspended, contact support" message, not a generic authentication failure or a confusing blank state.
+- Nightly generation job fails to run for one night — the next run's catch-up logic must generate the missed instance without creating a duplicate for a period already covered (F-07's stated edge case).
+- Billing cycle edited mid-cycle on an existing `UtilityAccount` — the in-flight instance for the current period is unaffected; only future generation uses the new frequency (F-07).
+- A bill is entered for a period that was never flagged `Expected` (e.g. a brand-new connection's first bill) — the system must still accept and correctly link it (F-08).
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't add a `platform_operator: boolean` flag to the existing `User` table "to save a migration" — this collapses the deliberate separation between customer identities and AddMin-internal identities that makes cross-tenant privilege escalation structurally impossible; a shared table makes it merely a bug away.
-- Don't let `TenantStatusGuard` and Step 05's `SubscriptionGuard` become one combined check "since they're related" — an org can be suspended with an active subscription (e.g., abuse) or active with an expired trial; conflating them produces incorrect access decisions in exactly the cases this feature exists to handle correctly.
-- Don't edit the Step 02 migration file to add `tenant_status` retroactively — this repository already ran that migration in production/staging (commit `d992408`); editing history instead of adding a new migration will desync any environment that already applied it.
-- Don't skip MFA for `PlatformOperator` accounts because "it's just internal" — this is the single account type in the entire system with cross-org access; it is the highest-value target in the product, not the lowest.
+- Don't forget to declare a job's `entities` in `main.wasp` — this is the single most common Wasp runtime failure and it will not show up until the job actually runs in a scheduled context, not during `wasp start` development.
+- Don't build the missing-item scan as a query the frontend runs on page load — it must be a server-side nightly job per `04-architecture.md`'s job list, so the flag exists independent of whether anyone happens to open the dashboard that day.
+- Don't couple obligation generation tightly to "utility" only — write `schedule.ts` generically now (scope_type as a real discriminator) since Lease/AMC/Compliance in Step 08 reuse this exact engine; retrofitting genericness later is a bigger diff than building it now.
+- Never let a failed notification send block the underlying obligation state transition — per `04-architecture.md`'s failure-mode note, notification failures log and retry independently of the state machine.
 
 ### 📊 Quality bar
-- `/internal/*` endpoints reject an unauthenticated or customer-scoped request in under 100ms (fail fast, no unnecessary work before the guard check).
-- Zero shared code path between `PlatformOperatorGuard` and `AuthzGuard` beyond the underlying session-verification primitive — confirmed by code review, not just testing.
+- Nightly generation job: processes 1,000 active schedules in under 10 seconds.
+- Missing-item scan: processes 20,000 obligation instances (the NFR scale target from `07-phases.md`) in under 15 seconds.
+- Zero duplicate `ObligationInstance` rows for the same (schedule_id, period) pair across 10 consecutive manual job re-runs in a test environment.
 
 ### 🛑 Stop and review (gate before next step)
-1. Apply the new migration on a copy of the current (already-Step-02-migrated) database — confirm it applies cleanly and existing seeded data is untouched.
-2. Attempt to load `/platform/organizations` using a valid customer session token (any role) — confirm 403.
-3. Log in as a seeded `PlatformOperator`, view the org list, set a test org's Subscription to `active` on a chosen plan, then suspend a different test org.
-4. Attempt an API call as a user belonging to the suspended org — confirm it is blocked, then reactivate the org and confirm the same call succeeds immediately without that user logging out and back in.
-5. Check the audit log for both actions — confirm each is attributed to the acting Platform Operator, not to any customer identity.
+1. Create a utility connection through the UI; confirm a `RecurringObligationSchedule` row exists immediately.
+2. Manually invoke the generation job twice in a row; confirm exactly one `ObligationInstance` exists for the current period, not two.
+3. Backdate a test instance's `expected_date` into the past with nothing linked, run the missing-alert job, confirm it flips to `Missing` and a notification appears in `NotificationLog`.
+4. Waive that missing item with a remark; confirm the audit trail records who waived it and why.
+5. Deactivate the underlying `UtilityAccount`; confirm no new instances generate on the next job run, but historical ones remain visible.
 
 ---
 
-## Build Step 07 — Utility Connection + Recurring Obligation Engine (F-06, F-07, F-08)
+## Build Step 07 — Bill lifecycle: entry, approval, payment
 
 ### 🎯 Goal
-Creating a utility connection automatically generates a recurring obligation schedule; the nightly job generates the next expected bill instance ahead of time; an instance that passes its expected window without a linked bill is automatically flagged Missing and notified.
+A bill can move end to end through draft → submit → approve/reject/return → pay/record → close, with maker-checker segregation of duties enforced server-side and every transition audited (F-09, F-10, F-11).
 
-### 📍 Why this is the leaf
-This is the structural moat identified in `03-analysis.md` — the feature no competitor in `02-research.md`'s research has. Step 08's entire bill-approval-payment flow operates on the `ObligationInstance` records this engine produces; without this step working correctly first, Step 08 has nothing real to attach bills to.
+### 📍 Why this depends on Step 06
+Bills link to `ObligationInstance` rows generated in Step 06 — the approval and payment workflow is meaningless without something real to approve. This step also builds `WorkflowDefinition`/`ApprovalStep` routing that Step 08's domain features (lease payments, AMC renewals) will reuse rather than reimplement.
 
 ### 📥 Inputs (preconditions before you start)
-- Step 04 complete: an active office exists with utilities marked "Yes" in onboarding
-- A background job runner configured (BullMQ + Redis per `04-architecture.md`)
+- Step 06 passed: obligation instances generating correctly, at least one test instance available to attach a bill to
 
 ### 📤 Outputs (what exists after this step passes)
-- `POST /api/utility-accounts` creates a connection and a linked `RecurringObligationSchedule` (F-06)
-- A nightly job generates `ObligationInstance` records ahead of `expected_date` for every active schedule (F-07)
-- A nightly job flags overdue-expected instances as `missing` and triggers a notification (F-08)
+- `/app/bills`, `/app/bills/new`, `/app/bills/[id]`, `/app/approvals`, `/app/payments` working
+- A configurable approval-routing engine (`/admin/workflow`) honoring office/amount-based thresholds
+- A complete audit trail on every bill from draft to closed
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-apps/api/src/utility/utility-account.service.ts
-apps/api/src/obligation-engine/obligation-schedule.service.ts
-apps/api/src/obligation-engine/obligation-instance.service.ts
-apps/api/src/obligation-engine/jobs/generate-instances.job.ts      nightly cron
-apps/api/src/obligation-engine/jobs/flag-missing.job.ts            nightly cron
-apps/web/app/utilities/new/page.tsx
-apps/web/app/utilities/[id]/page.tsx
+main.wasp                              — createUtilityBill, submitUtilityBill, approveUtilityBill, recordPayment actions
+src/server/utility/bill.ts             — createUtilityBill, submitUtilityBill, bulk entry
+src/server/workflow/approval.ts        — approveUtilityBill, routing-by-threshold logic, reused by Step 08's lease/AMC approvals
+src/server/payment/payment.ts          — recordPayment, overdue-flagging job
+src/server/payment/overdueJob.ts       — nightly job: unpaid bills past due_date → overdue
+src/client/bills/BillDetail.tsx        — /app/bills/[id]
+src/client/approvals/ApprovalQueue.tsx — /app/approvals
 ```
 
-**Tech decisions:**
-- Jobs are idempotent by construction: `generate-instances.job.ts` checks for an existing instance for `(schedule_id, period)` before creating one, so a re-run (e.g., after a crash) never duplicates.
-- Job scheduling via BullMQ repeatable jobs, not a naive `setInterval` — survives process restarts.
+**Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
+- Maker-checker enforcement happens in `approveUtilityBill`'s server logic, not the UI — same principle as Step 03's RBAC, applied to workflow specifically.
 
-**Patterns:**
-- `RecurringObligationSchedule` creation is never exposed as a direct user-facing endpoint — it is always created as a side effect of creating a `UtilityAccount`, `Lease`, `AMCContract`, or applicable `ComplianceItem`, enforced inside each of those services, not left to the frontend to remember to call separately.
-- All obligation status transitions go through a single `ObligationInstanceService.transitionStatus()` method that validates the transition is legal (per the state diagram in the PRD's Section 19) — no controller sets `status` directly.
+**Patterns (mandatory across the codebase):**
+- Every approve/reject/return/record-payment action writes before/after state to `AuditLog` inside the same transaction as the state change (per Step 02's transactional pattern).
+- Reject and Return actions require a non-empty remark, enforced server-side, not just as a frontend form validation.
+- Payment amount validation against the Payment Authorizer's configured limit happens server-side before the write commits — a client-side warning is not sufficient.
 
 ### ✅ Acceptance rubric
-- [ ] Creating a utility connection with a billing cycle immediately creates exactly one active `RecurringObligationSchedule`.
-- [ ] Running the nightly generation job creates an `ObligationInstance` with status `expected` for every active schedule whose next period is within the configured lead window.
-- [ ] Running the generation job twice in a row for the same period does not create a duplicate instance (idempotency test).
-- [ ] An instance whose `expected_date` plus configured grace window has passed with no linked bill transitions to `missing` automatically, without manual intervention.
-- [ ] A `missing` instance appears in the associated Office Admin's notification feed within one job run cycle.
-- [ ] Deactivating a `UtilityAccount` stops future instance generation but leaves historical instances untouched and queryable.
-- [ ] A bill entered against an instance still in `expected` status transitions that instance to `received`/`in_process`, not just creates an orphan bill record.
+- [ ] Bill amount must be greater than 0 and due date required before save, enforced server-side (F-09).
+- [ ] Duplicate account + billing period combination is flagged before submission (F-09).
+- [ ] A bill can complete the full lifecycle: enter → approve → pay/record → close, including reject/return/partial/overdue paths, tested end to end (F-10).
+- [ ] Reject and Return actions are rejected by the server if submitted without a remark (F-10).
+- [ ] The same user cannot be both Maker and Checker on the same bill unless the org has explicitly configured that exception, verified with a same-user attempt (F-10).
+- [ ] A bill amount exceeding the Checker's authorization limit routes automatically to a higher-tier approver (F-10).
+- [ ] No approver configured for an office/utility combination blocks submission with a clear configuration error (F-10).
+- [ ] Payment recording is restricted to the Payment Authorizer role, and an amount exceeding their authorization limit is blocked server-side, not just warned (F-11).
+- [ ] Partially paid bills correctly track and display the remaining balance (F-11).
+- [ ] Bills unpaid past due date automatically flag `Overdue` via the nightly job without manual action (F-11).
+- [ ] Two Payment Authorizers attempting to record payment on the same bill simultaneously — the second is rejected with an "already recorded" error, not a duplicate payment (F-11's concurrency edge case).
 
 ### ⚠️ Edge cases to handle
-- The nightly job fails to run for one night (deploy issue, outage) — the next successful run's catch-up logic must generate any missed instance without creating duplicates for periods that were correctly generated earlier.
-- A utility connection's billing cycle is edited mid-period — the currently in-flight instance keeps its original period, only future generation uses the new cycle.
-- An office is deactivated while it has open `expected`/`missing` instances — those instances remain visible in audit/history views but produce no further notifications.
+- Bill amendment is only allowed before approval; every amendment is captured in the audit log (F-09).
+- Approval threshold changes after a bill is already in-queue — the in-flight bill uses the threshold active at submission time, not the new one (F-10).
+- Payment recorded for an amount greater than the bill total is rejected and requires correction, never silently creates a credit balance (F-11).
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't generate the obligation instance ON `expected_date` — F-07's whole value proposition is generating it ahead of time; generating late defeats the entire "proactive" positioning from `01-idea.md`.
-- Don't let two overlapping cron runs process the same schedule concurrently — use a job-level lock or rely on the idempotency check being airtight, verified under concurrent execution, not just sequential testing.
-- Don't silently drop a "missing" flag once a bill eventually arrives without recording that it was ever late — the audit trail should show a bill was received after being flagged missing, not erase the history.
+- Don't implement the maker-checker same-user check as a UI-disabled button — a direct API call from the same user must also be rejected server-side.
+- Don't let the overdue-flagging job and the payment-recording action race without a transaction boundary — a payment recorded in the same window the nightly job runs must not leave the bill in an inconsistent `overdue`+`paid` state.
+- Don't hardcode approval thresholds — they're org-configurable per `/admin/workflow`; a hardcoded threshold blocks every org that needs a different limit.
 
 ### 📊 Quality bar
-- Nightly generation job processes 20,000 active schedules (the NFR portfolio size from the PRD) in under 5 minutes.
-- Missing-bill flagging job runs and completes within 2 minutes for the same portfolio size.
+- Bill submission to approval-queue visibility: under 1 second.
+- Payment recording round-trip: under 500ms including authorization-limit check.
+- Nightly overdue-flagging job: processes 20,000 bills in under 15 seconds (matches the NFR scale target).
 
 ### 🛑 Stop and review (gate before next step)
-1. Create a utility connection with a monthly billing cycle. Manually trigger the generation job. Confirm exactly one `expected` instance exists for the upcoming period.
-2. Trigger the generation job again immediately. Confirm no duplicate instance was created.
-3. Manually set the instance's `expected_date` into the past, then trigger the missing-flag job. Confirm the instance transitions to `missing` and a notification record is created.
-4. Enter a bill against that now-`missing` instance. Confirm it transitions correctly and the audit history shows it was previously flagged missing.
+1. Enter a bill, submit it, approve it as a different user, record payment as a Payment Authorizer, confirm it closes — check the full audit trail reads correctly top to bottom.
+2. Attempt to approve a bill as the same user who created it (without the exception configured) — confirm server-side rejection.
+3. Attempt Reject with an empty remark — confirm server-side rejection, not just a disabled button.
+4. Simulate two concurrent payment-recording attempts on the same bill — confirm the second is rejected cleanly.
+5. Backdate a bill's due date and run the overdue job — confirm it flags correctly and clears once payment is recorded.
 
 ---
 
-## Build Step 08 — Bill Entry + Approval Workflow + Payment Tracking (F-09, F-10, F-11)
+## Build Step 08 — Domain breadth: lease, vendor, facility, asset, compliance
 
 ### 🎯 Goal
-A bill can be entered, submitted, approved (or rejected/returned) by a Checker with mandatory remarks on rejection/return, and paid/recorded by a Payment Authorizer within their configured authorization limit — the full flow the PRD's acceptance criteria calls "end-to-end."
+Lease/rent, vendor/AMC, maintenance, asset custody, and compliance tracking are all live, each generating obligations through the same engine built in Step 06 and routing through the same approval/payment infrastructure built in Step 07 (F-12 through F-17).
 
-### 📍 Why this is the leaf
-This is the first fully closed obligation lifecycle in the product and the flow every design-partner demo in `07-phases.md`'s Phase 1 exit criteria depends on. It is also the first place Step 03's segregation-of-duties enforcement gets exercised against real financial actions, not just a synthetic test.
+### 📍 Why this depends on Step 07
+This step is deliberately not five separate steps — every one of these five domains reuses the Obligation Engine (Step 06) and Workflow/Payment infrastructure (Step 07) rather than inventing its own. Building it as one step forces that reuse; building it as five risks five slightly different, subtly incompatible obligation/approval implementations.
 
 ### 📥 Inputs (preconditions before you start)
-- Step 07 complete: `ObligationInstance` records with status `expected`/`missing` exist to attach bills to
-- Step 04's role assignment step has assigned at least one Checker and one Payment Authorizer to the test office
+- Step 07 passed: obligation engine + approval/payment workflow proven on the utility-bill case
 
 ### 📤 Outputs (what exists after this step passes)
-- Bill entry, invoice upload, and bulk entry working (F-09)
-- Approval routing with amount-threshold-based multi-step chains, Approve/Reject/Return actions (F-10)
-- Payment Tracking Mode recording with authorization-limit enforcement and automatic overdue flagging (F-11)
+- `/app/property/*`, `/app/vendors/*`, `/app/maintenance/*`, `/app/assets/*`, `/app/asset-requests/*`, `/app/compliance/*` all working
+- Lease, AMC, and compliance renewals generating `RecurringObligationSchedule`/`ObligationInstance` rows through Step 06's shared engine
+- TDS calculation live on rent payments
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-apps/api/src/utility/bill.service.ts
-apps/api/src/workflow/approval.service.ts            routing, authorization-limit checks
-apps/api/src/workflow/workflow-definition.seed.ts     default approval chains
-apps/api/src/payment/payment.service.ts               tracking-mode recording, overdue job
-apps/api/src/payment/jobs/flag-overdue.job.ts
-apps/web/app/bills/new/page.tsx
-apps/web/app/bills/[id]/page.tsx
-apps/web/app/approvals/page.tsx
+main.wasp                                — createLease, getLease, createVendor, createMaintenanceRequest, createWorkOrder, createAssetRequest actions/queries
+src/server/property/lease.ts             — createLease (also creates rent RecurringObligationSchedule via Step 06's schedule.ts), TDS calculation
+src/server/vendor/vendor.ts              — createVendor, AMCContract creation (also creates renewal schedule)
+src/server/facility/maintenance.ts       — createMaintenanceRequest, createWorkOrder, SLA breach job
+src/server/asset/asset.ts                — asset register, createAssetRequest, warranty-expiry job
+src/server/compliance/compliance.ts      — ComplianceItem tracking, expiry job
+src/client/property/LeaseWizard.tsx      — /app/property/leases/new
+[+ one client page per domain per 06-frontend.md's route list]
 ```
 
-**Tech decisions:**
-- Approval routing resolves the approver chain at submission time and stores it against the bill, per F-10's edge case ("in-flight bill uses the threshold that was active at submission time") — never re-resolve dynamically at approval time.
-- Payment recording validates the authorization limit server-side inside `PaymentService`, called from the controller — never trust a client-supplied "this is within my limit" flag.
+**Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
+- TDS rate is configurable at org level, overridable per landlord, per F-13 — do not hardcode a single national rate.
 
-**Patterns:**
-- Reject/Return actions share one endpoint shape requiring a non-empty `remark` field, validated server-side (not just a frontend `required` attribute) — per F-10's acceptance criteria.
-- Bill status transitions go through a single `BillService.transitionStatus()` method mirroring the pattern established in Step 07 for obligation instances — no direct Prisma `update` calls to `status` scattered across the codebase.
+**Patterns (mandatory across the codebase):**
+- Lease and AMCContract creation call the exact same `src/server/obligation/schedule.ts` function Step 06 built for utilities — not a domain-specific reimplementation.
+- Renewal reminder windows (180/90/60/30 for lease, 60/30 for AMC, configurable for compliance) are config values, not hardcoded per-job constants — the notification job reads them from `NotificationRule`.
 
 ### ✅ Acceptance rubric
-- [ ] Bill entry rejects an amount ≤ 0 and a missing due date before allowing save.
-- [ ] Entering a bill for a duplicate `(utilityAccountId, billingPeriod)` combination shows a warning before submission.
-- [ ] Submitting a bill with no approver configured for its office/utility/amount combination is blocked with a specific configuration error, not a silent failure or crash.
-- [ ] A Checker can Approve, Reject (with remark), or Return for Correction (with remark) — attempting Reject/Return with an empty remark fails server-side validation.
-- [ ] The Maker who submitted a bill cannot approve that same bill, verified with an explicit test using the same user ID for both actions.
-- [ ] An approved bill enters the Payment Authorizer's queue and is blocked from payment recording if the amount exceeds that authorizer's configured limit.
-- [ ] Recording a partial payment correctly updates the bill status to `partially_paid` and displays the remaining balance.
-- [ ] The overdue job flags any unpaid bill past its due date as `overdue` without manual action, and clears the flag automatically once paid.
-- [ ] Every approve/reject/return/payment action produces a corresponding `AuditLog` entry with before/after status.
+- [ ] A rented office supports landlord, lease, recurring rent/CAM, and renewal reminders end to end (F-12).
+- [ ] Creating an active lease automatically creates the monthly rent `RecurringObligationSchedule` through Step 06's shared engine (F-12).
+- [ ] Lease renewal reminders fire at 180/90/60/30 days without manual triggering (F-12).
+- [ ] TDS calculation is accurate against the configured percentage across at least 5 test scenarios including a landlord-specific override (F-13).
+- [ ] A landlord flagged TDS-applicable with no configured rate blocks payment with a clear error, never a silent zero-TDS payment (F-13).
+- [ ] A vendor cannot be assigned to any work order or AMC while status is `Pending Activation` (F-14).
+- [ ] AMC renewal alerts trigger at 60- and 30-day intervals (F-14).
+- [ ] A maintenance request can route to a vendor with SLA tracking and closure evidence end to end (F-15).
+- [ ] SLA breach triggers automatic escalation (F-15).
+- [ ] Work order cannot close without Admin verification following vendor completion (F-15).
+- [ ] An asset request moves Employee → Manager → Admin → allocation and ends with a custodian-linked asset (F-16).
+- [ ] Compliance certificate status accurately reflects Valid/Expiring/Expired/Missing/Not Applicable at all times, with expiry reminders firing at the configured advance period (F-17).
+- [ ] Unresolved expired compliance items escalate to Office Head within the configured SLA threshold (F-17).
 
 ### ⚠️ Edge cases to handle
-- Two Payment Authorizers attempt to record payment on the same bill simultaneously — the second request must fail with an "already recorded" error, not create a duplicate payment (test with a concurrent request, not just sequential).
-- A bill is returned for correction multiple times — the full history of each round-trip must remain visible to both Maker and Checker, not just the latest remark.
-- A payment amount greater than the remaining bill balance is submitted — reject it, don't silently create a credit.
+- Lease terminated mid-cycle — remaining scheduled future rent instances are cancelled, not left dangling (F-12).
+- Vendor document (e.g. insurance) expires — vendor is flagged but not auto-deactivated pending manual review (F-14).
+- Asset marked Retired still shows historical assignment/service records for audit, but can't be reassigned (F-16).
+- Compliance type applicability varies by jurisdiction — an org can mark a seeded type Not Applicable for one office without affecting others (F-17).
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't resolve the approval chain fresh every time someone views the bill — if the org's threshold configuration changes after submission, the PRD requires the originally-resolved chain to still apply to that in-flight bill.
-- Don't implement the Maker-cannot-approve-own-bill check only in the frontend button's disabled state — this must be a server-side check in `ApprovalService`, verified by directly calling the API as that user.
-- Don't let a payment recording silently succeed above the authorizer's limit "because it's just tracking mode, not real money movement" — the control value of Payment Tracking Mode per `03-analysis.md`'s go-to-market strategy IS the enforced limit; skipping this defeats the entire feature's purpose.
+- Don't reimplement obligation scheduling per-domain "because lease is a bit different from utility" — the differences (frequency, scope_type) are exactly what `RecurringObligationSchedule`'s existing fields already model; a second implementation is duplicated logic that will drift.
+- Don't enable real TDS/compliance calculations for actual payment processing before Finance/CA sign-off per org jurisdiction — `07-phases.md`'s risk register calls this out explicitly; gate it behind a per-org confirmation flag if sign-off hasn't happened yet.
+- Don't let SLA escalation logic track state with only a boolean "already escalated" flag — F-15's edge case requires it to re-evaluate state each run and also store a last-escalated timestamp, to avoid both silent gaps and notification spam.
 
 ### 📊 Quality bar
-- Bill submission-to-approval-notification latency under 5 seconds.
-- Zero duplicate payments possible under concurrent submission (verified with a load test issuing simultaneous requests).
+- Lease/AMC/Compliance renewal reminder jobs: correctly fire for all configured windows, verified against at least 4 distinct window values (180/90/60/30) in a test run.
+- TDS calculation: zero rounding discrepancies across 5 test scenarios verified against manual calculation.
+- Asset request full lifecycle (create → approve → allocate → close): under 2 seconds per step, no step silently drops state.
 
 ### 🛑 Stop and review (gate before next step)
-1. As a Maker, enter and submit a bill. Confirm it appears in the correct Checker's queue based on configured routing.
-2. Attempt to approve it as the same Maker user via direct API call — confirm rejection.
-3. As the Checker, return it for correction with a remark. Confirm it reappears in the Maker's queue with the remark visible.
-4. Resubmit, approve, then record a partial payment as the Payment Authorizer. Confirm the remaining balance is correct and the bill status is `partially_paid`.
-5. Manually backdate the due date on a second unpaid bill and run the overdue job — confirm it flags as `overdue`.
+1. Create a lease, confirm a monthly rent `RecurringObligationSchedule` exists and the next `ObligationInstance` generates correctly via the shared nightly job.
+2. Record a rent payment for a TDS-applicable landlord with no rate configured — confirm it blocks with a specific error, then configure the rate and confirm the payment proceeds with correct net amount.
+3. Walk an asset request from Employee submission through Manager approval to Admin allocation — confirm the asset's status updates to Assigned and the custodian is recorded.
+4. Log a maintenance request, assign a work order, mark it complete as the vendor, attempt to close it without Admin verification — confirm it's blocked; verify as Admin, confirm it closes.
+5. Mark a compliance item Expired via a backdated test date, run the expiry job, confirm Office Head escalation fires within the configured SLA window.
 
 ---
 
-## Build Step 09 — Property & Lease + TDS (F-12, F-13)
+## Build Step 09 — Reporting: Office Home, My Actions, Executive Dashboard
 
 ### 🎯 Goal
-A rented office has a landlord, lease, and auto-generated monthly rent obligation; renewal reminders fire at configured intervals; TDS is calculated correctly on rent payments and blocked when a TDS-applicable landlord has no configured rate.
+Office Home, My Actions, and the Executive Dashboard all read live transactional data with correct drill-down, load within 3 seconds at the 50-office/20,000-record scale target, and never show dummy KPI values (F-18).
 
-### 📍 Why this is the leaf
-This closes the second problem cluster from `02-research.md` (lease expiry surprises) and the TDS risk flagged as requiring Finance/CA sign-off in `03-analysis.md`'s risk matrix — get the TDS math wrong here and it damages the exact trust this feature is meant to build.
+### 📍 Why this depends on Step 08
+Reporting has nothing real to aggregate until every domain module from Steps 04–08 exists and is producing real obligation, bill, lease, vendor, asset, and compliance data. Building dashboards earlier means building them against fixtures, which is exactly the "dummy/seeded KPI data" the Founder's Rules in `01-idea.md` explicitly forbid.
 
 ### 📥 Inputs (preconditions before you start)
-- Step 08 complete: Payment recording and authorization-limit enforcement already work for utility bills — Lease rent payments reuse the same `PaymentService`
-- Step 04's onboarding wizard already branches into "Rented" — this step implements what that branch creates
+- Step 08 passed: all P0 domain modules producing real data through real workflows
 
 ### 📤 Outputs (what exists after this step passes)
-- Landlord and Lease CRUD with rent schedule auto-generation (F-12)
-- Renewal reminders at 180/90/60/30 days (F-12)
-- TDS calculation integrated into the rent payment flow (F-13)
+- `/app` (redirect logic), `/app/offices/[officeId]` (Office Home), `/app/my-actions`, `/app/reports/*` all working
+- `getOfficeHomeDashboard`, `getExecutiveDashboard`, `listObligationInstances` operations live
+- A nightly aggregation-refresh job backing fast dashboard reads at scale, per `04-architecture.md`'s Reporting Module job
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-apps/api/src/property/landlord.service.ts
-apps/api/src/property/lease.service.ts               creates RecurringObligationSchedule for rent
-apps/api/src/property/jobs/renewal-reminder.job.ts
-apps/api/src/tds/tds.service.ts                       rate resolution + calculation
-apps/web/app/property/leases/new/page.tsx             Lease Setup wizard
-apps/web/app/property/leases/[id]/page.tsx
+main.wasp                                    — getOfficeHomeDashboard, getExecutiveDashboard, listObligationInstances queries; aggregationRefreshJob
+src/server/reporting/officeHome.ts           — getOfficeHomeDashboard: setup %, overdue, pending approvals, renewals for one office
+src/server/reporting/executive.ts            — getExecutiveDashboard: cross-office spend/overdue/renewal/compliance aggregation
+src/server/reporting/myActions.ts            — listObligationInstances filtered to "assigned to me" across every module
+src/server/reporting/aggregationJob.ts       — nightly refresh of read-optimized aggregation tables
+src/client/dashboard/OfficeHome.tsx          — /app/offices/[officeId]
+src/client/dashboard/ExecutiveDashboard.tsx  — /app/reports/executive
+src/client/dashboard/MyActions.tsx           — /app/my-actions
 ```
 
-**Tech decisions:**
-- TDS rate resolution order: landlord-specific override → organization default → block if neither exists and landlord is flagged TDS-applicable. This resolution logic lives in one function (`TdsService.resolveRate()`), never duplicated inline at each call site.
-- Lease renewal reuses the same notification infrastructure built for Step 07's missing-bill alerts, not a separate one-off reminder mechanism.
+**Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
+- The Reporting Module owns no primary data — it reads across every transactional module, optionally backed by a read-optimized aggregation store refreshed nightly, per `04-architecture.md`.
 
-**Patterns:**
-- Rent obligation generation reuses `ObligationScheduleService` from Step 07 exactly as-is (scope_type = `rent`) — do not fork a parallel obligation mechanism specific to leases.
-- Escalation clause application is a scheduled job that updates the schedule's amount at the configured effective date — it does not retroactively change already-generated past instances.
+**Patterns (mandatory across the codebase):**
+- Every dashboard section fetches via its own `useQuery` call so one slow/failing section doesn't block the rest of the page — per `06-frontend.md`'s Office Home page spec (section-level loading/error states).
+- Aggregation staleness is shown honestly with a "last updated" timestamp, never silently presented as real-time when it's actually the nightly refresh — per `04-architecture.md`'s stated failure mode ("stale-but-safe").
 
 ### ✅ Acceptance rubric
-- [ ] Marking an office "Rented" and completing landlord + lease details creates an active `Lease` and exactly one monthly rent `RecurringObligationSchedule`.
-- [ ] Lease end date earlier than or equal to start date is rejected at save time with a clear validation error.
-- [ ] Renewal reminders fire at each of 180/90/60/30 days before lease expiry, verified by manually setting a lease's end date and running the reminder job.
-- [ ] A TDS-applicable landlord with no configured rate blocks the rent payment with a specific validation error naming the missing configuration — payment is not silently processed at 0% TDS.
-- [ ] TDS calculation produces the correct net payable amount for a landlord-specific override rate and, separately, for the organization default rate, tested against both paths.
-- [ ] TDS deduction history is queryable landlord-wise for a given period and exportable.
-- [ ] Escalation clause changes the rent schedule's amount starting from its effective date, with prior-period instances retaining their original amount.
+- [ ] All dashboards read live transactional data; zero dummy or hardcoded KPI values in any environment reachable by a real user, verified by code review grep for hardcoded numbers in dashboard components (F-18).
+- [ ] My Actions aggregates pending items across Utility, Lease, Maintenance, Asset, Vendor, and Compliance into one list per user (F-18).
+- [ ] Every KPI on the Executive Dashboard opens the underlying source records when clicked (F-18).
+- [ ] Dashboard and list views load within 3 seconds for a seeded portfolio of 50 offices / 20,000 utility records — measured directly, not estimated (F-18).
+- [ ] Filters (office/module/period/status) are combinable and persist in the URL for shareable links (F-18).
+- [ ] Export to PDF/Excel works for every supported report (F-18).
+- [ ] A newly activated office with no historical data shows a "getting started" state, not a misleading zero-value chart (F-18's edge case).
+- [ ] My Actions shows a clear empty state when a user has zero pending items, not a blank or broken screen (F-18's edge case).
+- [ ] A drill-down link to a since-deleted/archived record shows a graceful "no longer available" message instead of erroring (F-18's edge case).
 
 ### ⚠️ Edge cases to handle
-- Lease is renewed with a different rent amount — the new amount applies only to future rent instances; already-closed prior instances are untouched.
-- Lease is terminated mid-cycle — cancel remaining future-period instances for that schedule rather than leaving them dangling in `expected` status forever.
-- TDS rate is changed at the organization level mid-year — already-recorded payments retain the rate that was active when they were processed.
+- Section-level failures (one card's query fails) must not blank the whole Office Home page — isolate error boundaries per section, per `06-frontend.md`.
+- The 3-second load budget at 50-office scale is a real constraint, not aspirational — if the nightly aggregation job's data goes stale mid-day due to heavy write volume, the dashboard must still respond fast even if slightly behind, per the "stale-but-safe" failure mode.
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't calculate TDS as a client-side display-only value that the server doesn't independently verify before recording the payment — the net payable amount must be computed and validated server-side.
-- Don't build a separate obligation-generation code path for rent "since it's slightly different from utility bills" — this duplicates Step 07's carefully-built idempotency and status-transition logic; extend the existing engine instead.
-- Don't go live with TDS calculation against real payments before Finance/CA sign-off on rate configuration, per the explicit open decision in the PRD's Section 30 — gate this behind a feature flag if a design partner needs the rest of the lease module before that sign-off lands.
+- Don't seed any dashboard with placeholder/demo numbers "just to show the layout" during development and forget to remove it — the Founder's Rules make this a hard product requirement, not a style preference; treat any hardcoded KPI as a shipped bug.
+- Don't build the Executive Dashboard as one giant query joining everything — build it against the nightly aggregation tables per `04-architecture.md`'s design, or the 3-second budget at 20,000 records will not hold.
+- Don't skip the URL-persisted filter state — F-18's acceptance criteria requires shareable links, and retrofitting query-param sync after the fact usually means redoing the filter component's state management.
 
 ### 📊 Quality bar
-- TDS calculation and net payable amount are accurate in 100% of a test matrix covering landlord-override, org-default, and missing-config scenarios.
-- Renewal reminder job correctly identifies all leases within each alert window in under 1 minute for a 50-office portfolio.
+- Office Home load: under 3 seconds at 50-office/20,000-record seeded scale (hard NFR from `07-phases.md`).
+- Executive Dashboard drill-down click to source record: under 1 second.
+- Export generation (PDF/Excel): under 5 seconds for a filtered view of up to 5,000 rows.
 
 ### 🛑 Stop and review (gate before next step)
-1. Create a landlord and a lease with a rent amount and TDS-applicable flag but no TDS rate configured. Attempt to record a rent payment — confirm it's blocked with a specific error.
-2. Configure a TDS rate for that landlord. Retry the payment — confirm the net payable amount is mathematically correct.
-3. Set a second lease's end date to trigger the 90-day reminder window, run the reminder job, confirm the notification fires exactly once (not duplicated on a second run the same day).
-4. Attempt to save a lease with an end date before its start date — confirm rejection.
+1. Seed a test environment to 50 offices / 20,000 utility records (a scripted seed, not manual entry) and time Office Home and Executive Dashboard loads — confirm both under 3 seconds.
+2. Click through 5 different Executive Dashboard KPIs and confirm each drill-down opens the correct underlying records.
+3. Set a filter combination on Executive Dashboard, copy the URL, open it in a new incognito session as a differently-scoped user — confirm the filter applies but data is still correctly office-scoped to that user.
+4. Grep every dashboard component file for hardcoded numeric literals that look like KPI values — confirm none exist outside of test fixtures.
+5. Delete/archive a record referenced by an existing My Actions drill-down link and click it — confirm the graceful "no longer available" message, not an error page.
 
 ---
 
-## Build Step 10 — Vendor, Maintenance, Asset, Compliance (F-14, F-15, F-16, F-17)
+## Build Step 10 — Marketing site (Astro)
 
 ### 🎯 Goal
-Vendors can be registered and linked to AMC contracts with renewal alerts; maintenance requests route to vendors with SLA tracking and evidence capture; assets can be registered and requested/allocated through the Employee → Manager → Admin flow; compliance certificates are tracked with expiry alerts and escalation.
+`addmin-marketing/` is a fully separate, deployed Astro site covering all seven pages from `09-marketing-website.md`, with every "Start Free Trial" CTA correctly linking into the live `/signup?plan=` route from Step 04/05.
 
-### 📍 Why this is the leaf
-These four modules complete the P0 module set from `07-phases.md`'s Phase 2 and are what makes AddMin usable for a design partner's full real office, not just the utility/lease wedge. They share the Obligation Engine (AMC and compliance renewal) and Workflow modules built in Steps 05-06, so building them after those steps reuses infrastructure instead of duplicating it.
+### 📍 Why this depends on Step 09
+The marketing site's entire value proposition rests on the product actually working — every claim on the Home page ("every obligation tracked automatically, flagged before it's due") needs to be true by the time real traffic hits the CTA. Building the marketing site before the product's core loop (Steps 04-09) was proven would risk shipping marketing copy for features that don't yet exist, which `09-marketing-website.md`'s own voice/tone rule explicitly forbids ("if a feature is still on the roadmap, it doesn't appear on the marketing site until it ships").
 
 ### 📥 Inputs (preconditions before you start)
-- Step 07's Obligation Engine (AMC and compliance items reuse the same schedule/instance mechanism)
-- Step 08's Workflow module (asset request approval reuses the Maker-Checker pattern)
+- Step 09 passed: full product loop (signup → onboard → subscribe → obligations → dashboards) working
+- Pricing figures finalized (Starter/Growth/Enterprise ranges from `01-idea.md`/`03-analysis.md`) and Stripe Products/Prices from Step 05 matching exactly
 
 ### 📤 Outputs (what exists after this step passes)
-- Vendor registration, activation gating, and AMC renewal alerts (F-14)
-- Maintenance request → work order → SLA escalation → verified closure, with photo/video evidence (F-15)
-- Asset register and Employee → Manager → Admin → allocation request flow (F-16)
-- Compliance checklist with expiry tracking and Office Head escalation (F-17)
+- `addmin-marketing/` deployed to its own Fly.io app, independent of the AddMin App's deploy
+- Home, How it works, Pricing, Who it's for, About/Trust, Blog, Contact pages all live
+- Every "Start Free Trial" button correctly deep-links to `/signup?plan=<plan>` on the deployed AddMin App
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-apps/api/src/vendor/vendor.service.ts
-apps/api/src/vendor/amc.service.ts                    reuses ObligationScheduleService
-apps/api/src/maintenance/maintenance-request.service.ts
-apps/api/src/maintenance/work-order.service.ts
-apps/api/src/maintenance/sla-escalation.job.ts
-apps/api/src/asset/asset.service.ts
-apps/api/src/asset/asset-request.service.ts            reuses ApprovalService pattern
-apps/api/src/compliance/compliance-item.service.ts
-apps/api/src/compliance/compliance-escalation.job.ts
-apps/web/app/vendors/**, /app/maintenance/**, /app/assets/**, /app/compliance/**
+addmin-marketing/                       — separate project root, own git history or subfolder per team preference
+  src/pages/index.astro                 — Home
+  src/pages/how-it-works.astro
+  src/pages/pricing.astro
+  src/pages/who-its-for.astro
+  src/pages/about.astro
+  src/pages/blog/[...slug].astro
+  src/pages/contact.astro
+  src/content/pricing.ts                — plan data, must match Step 05's Stripe Products exactly
+  fly.toml                              — separate Fly.io static-site deploy config
 ```
 
-**Tech decisions:**
-- AMC renewal and Compliance expiry both create `RecurringObligationSchedule` records (scope_type = `amc` / `compliance`) — same engine as utility and rent, no new mechanism.
-- Asset request approval reuses the `ApprovalService` abstraction from Step 08, configured with a different chain (Employee → Manager → Admin) rather than a bespoke state machine.
+**Tech decisions** (locked from blueprint stage 04 — do not re-litigate):
+- Astro, static-first, near-zero JS — chosen specifically because this site has no auth and no dynamic data, per `04-architecture.md`.
+- Deployed to Fly.io as a small static site, separately from the Wasp app, so the team operates one hosting platform without coupling the two deploys.
 
-**Patterns:**
-- Photo/video evidence uploads go through the shared Document module (`04-architecture.md`), tagged with `before`/`after` and uploader/timestamp — not a maintenance-specific upload path.
-- Compliance escalation reuses the same notification/escalation infrastructure as SLA escalation — one escalation mechanism, parameterized by threshold and recipient role, not two separate implementations.
+**Patterns (mandatory across the codebase):**
+- No technical vocabulary ("API," "database," "backend") appears anywhere on the site, per `09-marketing-website.md`'s voice rule.
+- Every plan card's price and feature list is sourced from one `src/content/pricing.ts` file, cross-checked by hand against Step 05's actual Stripe Prices — a mismatch here is a customer-trust bug, not a cosmetic one.
+- No customer logos or quotes appear until real design-partner customers exist — the "Who trusts this" section stays deliberately empty/placeholder rather than fabricated, per `09-marketing-website.md`.
 
 ### ✅ Acceptance rubric
-- [ ] A vendor in `pending_activation` status cannot be assigned to any work order or AMC contract.
-- [ ] AMC renewal alerts fire at 60 and 30 days before contract expiry.
-- [ ] A maintenance request can route to a vendor, track an SLA due time, and be blocked from closure until an Admin explicitly verifies completion.
-- [ ] SLA breach on an open work order triggers an escalation notification automatically.
-- [ ] Photo/video evidence is stored with timestamp, uploader, and a before/after distinction.
-- [ ] An asset request moves Employee → Manager approval → Admin review → (existing asset allocated OR Procurement handoff recorded) → Closed, with the custodian correctly linked at the end.
-- [ ] A compliance item's status accurately reflects Valid/Expiring/Expired/Missing/Not Applicable at every point, recalculated on every relevant change.
-- [ ] An expired compliance item unresolved past the configured SLA (PRD default: 15 days) escalates to Office Head automatically.
+- [ ] All seven pages from `09-marketing-website.md` exist and are reachable.
+- [ ] Every "Start Free Trial" button (Home hero, Home footer, header, every pricing card except Enterprise) links to `/signup?plan=<correct-plan>` on the live AddMin App URL.
+- [ ] The Enterprise pricing card's primary button is "Talk to us," linking to the Contact page — not `/signup`.
+- [ ] Pricing page figures exactly match Step 05's live Stripe Prices (checked by opening both side by side).
+- [ ] Lighthouse performance score ≥ 95 on the Home and Pricing pages (Astro's static-first design should make this comfortably achievable).
+- [ ] Zero occurrences of "API," "database," or "backend" anywhere in page copy, verified by grep across `src/pages/` and `src/content/`.
+- [ ] The site deploys independently — a marketing site change does not require a Wasp app redeploy, and vice versa, verified by deploying each separately and confirming the other is unaffected.
+- [ ] Blog has at least one published post targeting a real search query from the problem clusters in `02-research.md` (e.g. "utility bill tracking for multiple offices").
 
 ### ⚠️ Edge cases to handle
-- Vendor completes work but Admin verification finds it unsatisfactory — the work order reopens with a remark rather than closing silently.
-- An asset category has no available existing stock — the request correctly routes to a Procurement handoff state rather than getting stuck with no valid next action.
-- A compliance certificate is renewed with a backdated effective date — expiry countdown uses the new certificate's actual expiry date, not the date the renewal was recorded.
+- A visitor arrives at `/signup?plan=growth` with an invalid or unrecognized plan value — the signup flow should degrade gracefully (no plan pre-selected) rather than error.
+- Contact form submission failure (e.g. email delivery down) should show a clear retry message, not a silent failure that loses the lead.
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't build a bespoke state machine for asset-request approval "because it's a bit different" — reusing Step 08's `ApprovalService` with a different configured chain keeps segregation-of-duties enforcement consistent everywhere, including here.
-- Don't let compliance escalation silently stop once a certificate is marked Expired without renewal — per PRD Section 23, expired/missing mandatory compliance must remain visible until renewed or explicitly marked Not Applicable by an authorized role, not just logged once and forgotten.
-- Don't allow a vendor performance review to be skippable before an AMC renewal decision if the organization has configured it as required — check this server-side, not just as a UI nudge.
+- Don't let the marketing site's pricing page drift out of sync with Stripe's actual Prices — this is a customer-trust and billing-dispute risk, not just a content bug; add it to a pre-launch checklist item, not just a one-time check.
+- Don't build any part of this site inside the Wasp app "since it's easier to share components" — the entire point of the Astro split is that this site pays none of the full-stack framework's cost; merging it back defeats the architectural decision made in `04-architecture.md`.
+- Don't publish fabricated customer logos or quotes to make the site look more established — `09-marketing-website.md` is explicit that this space stays honestly empty until real design partners exist.
 
 ### 📊 Quality bar
-- SLA escalation job correctly identifies all breaching work orders within 1 minute of the configured threshold passing.
-- Photo/video upload supports files up to the organization's configured max size without losing already-entered maintenance request data on failure.
+- Lighthouse performance ≥ 95, accessibility ≥ 95, on Home and Pricing pages.
+- Page weight under 200KB (excluding images) per page, consistent with Astro's near-zero-JS design goal.
+- Time to Interactive under 1 second on a throttled 4G connection.
 
 ### 🛑 Stop and review (gate before next step)
-1. Register a vendor, confirm it cannot be assigned to a work order until activated.
-2. Create a maintenance request, assign it to the activated vendor with a near-term SLA, let the SLA pass, run the escalation job — confirm escalation fires.
-3. Submit an employee asset request with no existing stock available — confirm it reaches a Procurement handoff state rather than dead-ending.
-4. Mark a compliance certificate expired and leave it unresolved past the configured threshold — run the escalation job, confirm Office Head is notified.
+1. Click every "Start Free Trial" CTA on every page and confirm it lands on the live AddMin App's `/signup` with the correct `?plan=` value.
+2. Open the Pricing page and Step 05's Stripe dashboard side by side; confirm every number matches exactly.
+3. Run Lighthouse on Home and Pricing; confirm ≥95 performance.
+4. Grep the whole `addmin-marketing/src/` tree for "API", "database", "backend" — confirm zero hits.
+5. Deploy only the marketing site (not the app) and confirm the AddMin App's URL and behavior are completely unaffected.
 
 ---
 
-## Build Step 11 — Reporting: Office Home, My Actions, Executive Dashboard (F-18)
+## Build Step 11 — Production hardening and observability
 
 ### 🎯 Goal
-Every dashboard reads live transactional data (never dummy KPIs), My Actions aggregates pending items across every module built in Steps 05-08 into one queue, and the Executive Dashboard's every KPI drills down to its source records.
-
-### 📍 Why this is the leaf
-This is the feature `03-analysis.md` identifies as the artifact that drives renewal sponsorship from the Office Head persona — and the PRD's Section 1.2 explicitly forbids dummy KPI data in any environment a real user sees, making correctness here a hard release gate, not a polish item.
-
-### 📥 Inputs (preconditions before you start)
-- Steps 05-08 complete: real obligation, bill, lease, maintenance, asset, and compliance data exists to aggregate
-- Reporting Module's read model approach decided per `04-architecture.md` (read-only aggregation across transactional modules, with a nightly refresh job for expensive rollups)
-
-### 📤 Outputs (what exists after this step passes)
-- `/app/offices/[officeId]` Office Home reading live data
-- `/app/my-actions` aggregating pending items across every module
-- `/app/reports/executive` with working drill-down on every KPI
-
-### 🛠 Implementation details
-
-**Files to create:**
-```
-apps/api/src/reporting/office-home.service.ts
-apps/api/src/reporting/my-actions.service.ts          cross-module query aggregator
-apps/api/src/reporting/executive-dashboard.service.ts
-apps/api/src/reporting/jobs/refresh-aggregates.job.ts
-apps/web/app/offices/[officeId]/page.tsx
-apps/web/app/my-actions/page.tsx
-apps/web/app/reports/executive/page.tsx
-```
-
-**Tech decisions:**
-- KPI definitions are implemented exactly as specified in the PRD's Section 25 (e.g., "Overdue Bills = unpaid amount where due date < current date") — these formulas are the contract; do not approximate or simplify them.
-- My Actions queries each module's service directly for "items assigned to me" rather than maintaining a separate denormalized "tasks" table that can drift out of sync with the source data.
-
-**Patterns:**
-- Every dashboard component that displays a KPI accepts an `onDrillDown` handler that navigates to the filtered source-record list — never a static number with no click target.
-- No dashboard query result is ever mocked, stubbed, or hard-coded in a way that could reach a production or demo environment — this is checked explicitly in the Step 11 review gate below, not assumed.
-
-### ✅ Acceptance rubric
-- [ ] Office Home for a newly activated office with zero obligations yet shows an explicit "getting started" empty state, not a broken or misleadingly-zeroed chart.
-- [ ] My Actions correctly aggregates at least one pending item each from Utility (pending approval), Lease (renewal due), Maintenance (open request), and Compliance (expiring item) for a test office seeded with all four.
-- [ ] Every KPI on the Executive Dashboard, when clicked, navigates to a filtered list of exactly the source records that KPI counts.
-- [ ] Filters (office/module/period/status) combine correctly and are reflected in the URL, verified by copy-pasting a filtered URL into a new browser session and confirming the same filtered view loads.
-- [ ] Dashboard and list views load within 3 seconds for a seeded portfolio of 50 offices / 20,000 utility records (the NFR from the PRD).
-- [ ] No dashboard in the staging or production environment displays a hard-coded or placeholder KPI value under any circumstance — verified by code review, not just visual check.
-- [ ] Export to PDF/Excel produces a file matching the currently applied filters, not the full unfiltered dataset.
-
-### ⚠️ Edge cases to handle
-- A drill-down target record has since been archived or deleted — show a graceful "record no longer available" message instead of a broken link or 500 error.
-- A user with access to only one office views the Executive Dashboard — it correctly scopes to just their accessible office(s), never leaking data from offices outside their role/office scope (this re-exercises Step 03's authorization layer at the reporting layer specifically).
-
-### ❌ Common pitfalls (do NOT do these)
-- Don't leave a "demo mode" flag anywhere in the codebase that swaps in sample KPI data — the PRD is explicit that this is unacceptable for production/UAT, and a flag left in "off" by default has a way of getting flipped on accidentally during a live customer demo.
-- Don't build the Executive Dashboard's aggregation as a live join across all transactional tables on every page load if the portfolio-size performance target can't be met that way — use the nightly aggregate-refresh job from `04-architecture.md` and show a "last updated" timestamp instead of a slow live query.
-- Don't let My Actions silently drop an item type because its query is slow or errors — a partial-failure in one module's query should degrade that section gracefully, not silently omit those items from the count with no indication anything's missing.
-
-### 📊 Quality bar
-- Dashboard load time under 3 seconds at the 50-office/20,000-record benchmark, measured with realistic seeded data, not an empty database.
-- Zero hard-coded/mocked KPI values reachable from any non-test environment (verified by grep + manual review before this step's gate passes).
-
-### 🛑 Stop and review (gate before next step)
-1. Seed a test organization with realistic data across all modules (utilities, leases, maintenance, assets, compliance) for at least 3 offices.
-2. Load Office Home for each office — confirm real, correct data appears, including at least one overdue item and one upcoming renewal.
-3. Load My Actions as a user with cross-module pending items — confirm every item type appears and clicking one navigates to the correct detail page.
-4. Load the Executive Dashboard, click each KPI, confirm drill-down shows exactly the matching source records.
-5. Grep the codebase for any mock/dummy/placeholder KPI data path reachable outside test files — confirm zero results.
-
----
-
-## Build Step 12 — Frontend polish (loading/empty/error states, design system)
-
-### 🎯 Goal
-Every route listed in `06-frontend.md`'s sitemap has an explicit, tested loading state, empty state, and error state — no route shows a blank white screen or an unhandled exception under any of the conditions listed in each page spec.
-
-### 📍 Why this is the leaf
-By this point every feature works on the happy path. This step is what makes the product feel trustworthy to a real design-partner Admin encountering a slow network, a first-time empty office, or a failed request — exactly the moments identified in `02-research.md` as make-or-break for a buyer used to "good enough" spreadsheets.
-
-### 📥 Inputs (preconditions before you start)
-- Steps 04-09 complete: every route in `06-frontend.md`'s sitemap has working happy-path functionality
-
-### 📤 Outputs (what exists after this step passes)
-- Design system tokens from `06-frontend.md` (colors, typography, spacing, radius, shadow, motion) implemented as a shared Tailwind/CSS-variables config
-- Every page spec's named empty/loading/error state implemented and visually distinct
-- Responsive behavior at mobile/tablet/desktop breakpoints per `06-frontend.md`'s responsive grid
-
-### 🛠 Implementation details
-
-**Files to create:**
-```
-apps/web/tailwind.config.ts             design tokens from 06-frontend.md
-apps/web/components/ui/EmptyState.tsx
-apps/web/components/ui/Skeleton.tsx
-apps/web/components/ui/ErrorBoundary.tsx
-apps/web/components/domain/*.tsx        ObligationCard, ActionQueueItem, ApprovalActionBar, etc. from the component tree
-```
-
-**Tech decisions:**
-- Tailwind CSS configured with the exact token values from `06-frontend.md`'s design system section (brand `#D97706`, neutral scale, spacing scale 4/8/12/16/24/32/48/64, radius 4/8/12/16).
-- Error boundaries are per-section (per `06-frontend.md`'s Office Home spec: "one card failing to load shows an inline retry, doesn't blank the whole page"), not one global catch-all per page.
-
-**Patterns:**
-- Every data-fetching component has three explicit render branches: loading, empty, error — never an implicit "if data exists, render; else nothing," which produces a blank screen instead of a designed state.
-- Skeleton loading states match the actual layout of the loaded content (per `06-frontend.md`'s Office Home spec: "skeleton cards matching the section layout") — never a generic spinner replacing an entire structured page.
-
-### ✅ Acceptance rubric
-- [ ] Every route in `06-frontend.md`'s sitemap renders a named loading state when data-fetching is artificially delayed (test with a throttled network).
-- [ ] Every route's documented empty state (from its page spec in `06-frontend.md`) renders correctly when the underlying data is genuinely empty, not just visually similar to the loaded state with zero values.
-- [ ] Forcing an API error (e.g., killing the API mid-request) on each of the 8 page specs in `06-frontend.md` shows that page's documented error behavior, not an unhandled exception or blank screen.
-- [ ] The design system's color/spacing/radius tokens are used consistently — no component hard-codes a one-off hex value or pixel spacing outside the defined scale (spot-checked across at least 10 components).
-- [ ] Mobile (≤640px), tablet (641-1024px), and desktop (≥1025px) breakpoints each render correctly for Office Home, the Onboarding wizard, and the Executive Dashboard, per `06-frontend.md`'s responsive grid rules.
-- [ ] Reject/Return remark modals, file upload errors, and form validation errors all use the shared `<FormError>` component consistently, not ad-hoc inline error text per form.
-
-### ⚠️ Edge cases to handle
-- A section-level error (e.g., the compliance card on Office Home fails to load) must not cascade into breaking sibling sections on the same page.
-- Extremely long content (a vendor name, a long remark) must not break card/table layouts at any breakpoint — verify with intentionally long test strings, not just typical-length sample data.
-
-### ❌ Common pitfalls (do NOT do these)
-- Don't build empty states as an afterthought copy-pasted across every page with generic "No data" text — `06-frontend.md` specifies distinct, context-appropriate empty-state copy per page (e.g., Office Home's "You're all set" vs. Approvals' "Nothing pending your approval"); genericizing this undermines the guided, proactive feel that's the whole product thesis.
-- Don't let a single slow dashboard section block the entire page's loading state — use independent loading boundaries per section so fast sections render immediately.
-- Don't skip testing the error state by just "trusting the try/catch is there" — actually kill the API mid-request during manual testing for each of the 8 page specs; error boundaries silently fail to catch async errors in surprising ways if not tested directly.
-
-### 📊 Quality bar
-- Lighthouse accessibility score ≥ 90 on Office Home, Onboarding wizard, and Executive Dashboard (WCAG 2.1 AA is a stated PRD requirement, not optional polish).
-- No layout shift (CLS) greater than 0.1 on any of the 8 major pages during their loading-to-loaded transition.
-
-### 🛑 Stop and review (gate before next step)
-1. Throttle network to "slow 3G" in devtools and load each of the 8 page specs from `06-frontend.md` — confirm each shows its documented loading state, not a blank screen.
-2. Seed a brand-new, empty test office and view Office Home, Approvals, and Compliance register — confirm each shows its specific documented empty state.
-3. Kill the API process, then reload each of the 8 page specs — confirm each shows a graceful documented error state, not a browser-level crash or unhandled exception in the console.
-4. Resize the browser through mobile/tablet/desktop breakpoints on Office Home, Onboarding, and Executive Dashboard — confirm layout adapts per `06-frontend.md`'s responsive grid rules.
-5. Run Lighthouse against the three named pages — confirm accessibility score ≥ 90 on each.
-
----
-
-## Build Step 13 — Production deploy + observability
-
-### 🎯 Goal
-The full application is deployed to a production environment (separate from staging) with error monitoring, structured logging, and alerting configured, meeting the PRD's stated NFRs for availability and performance.
-
-### 📍 Why this is the leaf
-Steps 01-10 prove the product works. This step proves it keeps working unattended, which is the actual bar a paying design-partner customer holds you to — per `07-phases.md`'s Phase 3 exit criteria of 99.5% uptime measured over a 4-week window.
-
-### 📥 Inputs (preconditions before you start)
-- Steps 01-10 complete and passing on staging
-- Production hosting environment provisioned, separate database instance from staging
-- Sentry (or equivalent) and a structured logging destination configured
-
-### 📤 Outputs (what exists after this step passes)
-- Production environment live at a stable URL, isolated from staging data
-- Error monitoring capturing both frontend and backend exceptions with alerting to a real notification channel
-- Structured audit and application logs queryable for incident investigation
-- A load test confirming the PRD's stated NFRs (300 concurrent users, 3-second dashboard load at 50 offices/20,000 records)
-
-### 🛠 Implementation details
-
-**Files to create:**
-```
-apps/api/src/observability/logger.ts       structured logging wrapper
-apps/api/src/observability/sentry.ts       error capture config
-.github/workflows/deploy-production.yml    production deploy pipeline (manual approval gate)
-load-tests/dashboard-load.k6.js            load test script matching PRD NFRs
-```
-
-**Tech decisions:**
-- Production deploys require a manual approval step in CI, unlike staging's automatic deploy-on-merge — a financial-workflow product does not get automatic unattended production deploys.
-- Structured JSON logging (not plain-text console logs) so log queries can filter by `orgId`, `officeId`, `userId`, and `requestId` during incident investigation.
-
-**Patterns:**
-- Every background job (from Steps 05-08) logs its start, completion, and item-count-processed, so a silently-failing nightly job (e.g., obligation generation not running) is detectable from logs/alerts, not discovered days later when a customer notices missing bills.
-- Alerts fire to a real channel (email/Slack) for: job failure, error rate spike, and the health-check endpoint failing — not just recorded silently in a dashboard nobody watches.
-
-### ✅ Acceptance rubric
-- [ ] Production environment is reachable at a stable URL, fully isolated from the staging database (verified by confirming staging test data does not appear in production).
-- [ ] An intentionally-triggered backend exception appears in the error monitoring tool within 1 minute, with enough context (stack trace, request ID, user/org context) to diagnose without reproducing locally.
-- [ ] Killing the nightly obligation-generation job mid-run triggers an alert to the configured notification channel.
-- [ ] A load test simulating 300 concurrent authenticated users against the dashboard endpoints completes with no failed requests and p95 latency under the PRD's 3-second target.
-- [ ] Production deploy requires an explicit manual approval step and cannot be triggered by an automatic merge.
-- [ ] Audit logs from a production action are queryable by `orgId` + date range within seconds, not requiring a full table scan.
-- [ ] TLS 1.3 is enforced on all production traffic; verify with an external TLS-checking tool, not just trusting the hosting provider's default.
-
-### ⚠️ Edge cases to handle
-- A deploy fails partway through a database migration in production — the deploy pipeline must halt and alert rather than leaving the schema in an inconsistent state that the API then runs against.
-- Log volume from structured logging must not silently exceed a cost-relevant threshold — set a retention policy explicitly rather than accumulating indefinitely.
-
-### ❌ Common pitfalls (do NOT do these)
-- Don't point production and staging at the same database "temporarily to save setup time" — a single design-partner's real financial data mixed with test data is the kind of mistake that ends a pilot relationship immediately.
-- Don't skip the load test because "it probably scales fine" — the PRD's specific NFR numbers (300 concurrent users, 50 offices/20,000 records, 3-second load) are commitments in the source document design partners will have seen; verify them before claiming the product meets them.
-- Don't rely solely on the hosting provider's default uptime monitoring — configure your own synthetic health-check ping from an external service so an outage is detected even if the provider's own dashboard has a blind spot.
-
-### 📊 Quality bar
-- p95 dashboard load time under 3 seconds at the 50-office/20,000-record benchmark under a 300-concurrent-user load test.
-- Error monitoring captures 100% of unhandled exceptions in a 48-hour staging soak test before promoting this step to "done."
-
-### 🛑 Stop and review (gate before next step)
-1. Deploy to production via the manual-approval pipeline. Confirm the approval gate actually blocks an unapproved deploy attempt.
-2. Trigger a deliberate backend error in production (a test-only endpoint) — confirm it appears in the error monitoring tool with full context within 1 minute.
-3. Run the load test script against production — confirm it meets the PRD's stated NFRs.
-4. Manually fail the nightly obligation job (e.g., stop Redis briefly) — confirm an alert fires to the configured channel.
-5. Query the audit log for a specific `orgId` and confirm results return in under 2 seconds.
-
----
-
-## Build Step 14 — Post-launch ops & runbooks
-
-### 🎯 Goal
-A documented runbook exists for the top 5 operational failure scenarios (missed job run, authorization gap discovered, TDS calculation dispute, design-partner onboarding blocker, production incident), so a failure at 2am doesn't require re-deriving the system's behavior from source code under pressure.
+The system meets the reliability, security, and performance bars `07-phases.md`'s Phase 3 sets as exit criteria — 99.5% uptime over a 4-week window, a passing full authorization matrix, and zero P0 bugs in signup-to-payment — with monitoring in place to know if any of that regresses.
 
 ### 📍 Why this is the root
-This is the last node in the tree because it depends on everything above it actually existing and working — you cannot write a meaningful runbook for "the obligation job silently failed" until Step 07's job and Step 13's alerting both exist and have been exercised.
+Every prior step built a working feature; this step proves the whole system holds up under real usage and real failure modes, and closes the loop on observability so the team finds out about problems from a dashboard, not from a customer. Nothing later depends on this — it's the gate before "narrow launch" per `07-phases.md`'s Phase 3.
 
 ### 📥 Inputs (preconditions before you start)
-- Steps 01-11 complete and deployed to production
-- At least one design-partner organization actively using the product (per `07-phases.md`'s Phase 2)
+- Step 10 passed: full product + marketing site live
+- At least one design-partner organization ready to run real traffic through the system per `07-phases.md`'s Phase 2 pilot activities
 
 ### 📤 Outputs (what exists after this step passes)
-- A runbook document covering the top 5 failure scenarios with concrete diagnostic steps and remediation actions
-- An on-call/escalation path defined for production incidents
-- A support handover checklist per the PRD's Section 12.4 (Operational Acceptance Criteria)
+- Full role × office × action authorization test suite passing in CI, extended to cover every module built in Steps 04-08
+- Sentry alerting configured for error-rate thresholds, not just error capture
+- A documented incident/runbook process for the most likely failure modes (webhook miss, job failure, auth gap)
+- Bulk import/export polish, notification/escalation rule configuration UI, and audit log search UI per `07-phases.md`'s Phase 3 task list
 
 ### 🛠 Implementation details
 
 **Files to create:**
 ```
-docs/runbooks/missed-obligation-job.md
-docs/runbooks/authorization-gap.md
-docs/runbooks/tds-dispute.md
-docs/runbooks/onboarding-blocker.md
-docs/runbooks/production-incident.md
-docs/support-handover-checklist.md
+tests/authz.test.ts                       — extended (not new) to cover all modules through Step 08
+src/client/admin/AuditLogSearch.tsx       — /admin/audit-logs, searchable
+src/client/admin/NotificationRules.tsx    — /admin/notifications, configurable reminder/escalation windows
+docs/runbooks/webhook-miss.md             — what to do if a Stripe webhook is confirmed missed
+docs/runbooks/job-failure.md              — what to do if a pg-boss job repeatedly fails
+sentry.config additions                    — alert rules on error-rate thresholds, not just capture
 ```
 
-**Patterns:**
-- Every runbook follows the same shape: symptom → diagnostic query/command → likely root causes → remediation steps → how to confirm it's fixed → what to tell the affected customer.
-- Runbooks reference actual entity/table names from `04-architecture.md` and actual job names from Step 07/08, not generic placeholders — a runbook a future on-call engineer can't act on without re-reading the entire codebase first has failed its purpose.
+**Patterns (mandatory across the codebase):**
+- Every new module or endpoint from this point forward extends `tests/authz.test.ts` before merge, not after, per `07-phases.md`'s "Authorization test coverage" continuous initiative.
+- Every new state-changing endpoint is checked against the "audit entry produced where auditable" definition-of-done, per the same phases doc's "Audit trail completeness" initiative.
 
 ### ✅ Acceptance rubric
-- [ ] Each of the 5 runbooks includes a copy-pasteable diagnostic query or command specific to this codebase (e.g., a query to check `RecurringObligationSchedule` records with no corresponding recent `ObligationInstance`).
-- [ ] A person unfamiliar with the specific incident (tested by having a team member who didn't build that module follow the runbook) can diagnose and remediate a simulated version of each scenario using only the runbook.
-- [ ] The production-incident runbook names a specific escalation path (who gets paged, in what order, within what time).
-- [ ] The support handover checklist matches the PRD's Section 12.4 requirement: runbooks and escalation matrix delivered, plus role-based training with signed competency confirmation, before go-live.
-- [ ] Each runbook has been exercised at least once against a deliberately simulated version of its failure scenario in staging, not just written speculatively.
+- [ ] `tests/authz.test.ts` covers every role × office × action combination across all modules built through Step 08, passing 100% in CI.
+- [ ] Sentry is configured to alert (not just log) on error-rate spikes above a defined threshold, verified by triggering a burst of test errors and confirming an alert fires.
+- [ ] Dashboard performance at 50-office/20,000-record scale (Step 09's target) is re-verified against production-representative data, not just the original seed test.
+- [ ] Bulk import/export exists for offices, utility masters, vendors, and assets, each with per-row error reporting (Phase 3 task list).
+- [ ] Notification/escalation rule configuration is editable via `/admin/notifications`, no longer hardcoded (Phase 3 task list).
+- [ ] `/admin/audit-logs` supports search/filter by entity type, actor, and date range, usable by a Compliance Coordinator without engineering help.
+- [ ] A runbook exists and has been dry-run at least once for: a missed Stripe webhook, a repeatedly failing `pg-boss` job, and a suspected authorization gap.
+- [ ] Zero P0 bugs open in the signup-to-payment path, verified by a full manual walkthrough immediately before this gate.
+- [ ] 99.5% uptime measured over the most recent 4-week window on the production Fly.io deployment (Phase 3's exit criterion from `07-phases.md`).
 
 ### ⚠️ Edge cases to handle
-- A runbook's diagnostic query becomes stale after a schema change in a later feature addition — treat runbooks as living documents reviewed whenever the referenced schema/job changes, not a one-time artifact.
+- A `pg-boss` job's `retryLimit` is exhausted and it lands in a failed state — confirm this is visible somewhere a human will actually see it (Sentry, a dashboard, or an internal error queue per `04-architecture.md`'s stated failure mode for the obligation-generation job), not silently dropped.
+- A design partner's real data exposes a schema edge case the original seed data didn't cover (e.g. an unusual `bank_details` JSON shape) — treat this as expected at this stage, and confirm the validation layer degrades to a clear error rather than a 500.
 
 ### ❌ Common pitfalls (do NOT do these)
-- Don't write runbooks as generic "check the logs" advice — they must name the specific job, table, or endpoint involved, and the specific query to run against this schema.
-- Don't skip actually simulating each failure scenario before considering the runbook done — an untested runbook is a guess, and guesses under 2am incident pressure are how a 10-minute fix becomes a 3-hour outage.
-- Don't treat this step as optional "nice to have" documentation — the PRD explicitly lists support handover documentation as an Operational Acceptance Criterion, meaning a design partner's contract sign-off depends on it existing.
+- Don't treat "it works in the seeded test environment" as equivalent to "it works at production scale" — re-verify the 3-second dashboard budget against real design-partner data volume, which will have a different shape than synthetic seed data.
+- Don't skip writing the runbooks because "we'll figure it out when it happens" — the whole point of a runbook is that it's written calmly in advance, not improvised during an incident with a customer waiting.
+- Don't let audit log search ship without real filtering — a Compliance Coordinator paging through an unfiltered list of every action ever taken is not a usable feature, even if the data is technically all there.
 
 ### 📊 Quality bar
-- 100% of the 5 runbooks have been exercised against a simulated failure at least once, with the outcome (time to diagnose, time to remediate) recorded.
+- 99.5% uptime over a trailing 4-week window (hard Phase 3 exit criterion).
+- Zero P0 bugs in the signup-to-payment path at gate time.
+- Full authorization test suite: 100% pass, runtime under 60 seconds in CI.
+- Sentry alert-to-acknowledgment time in a dry run: under 5 minutes.
 
-### 🛑 Stop and review (gate — final gate of this playbook)
-1. Have a team member who did not build the Obligation Engine follow the missed-obligation-job runbook against a deliberately broken staging job — time how long it takes them to correctly diagnose and fix it using only the document.
-2. Repeat for the authorization-gap and TDS-dispute runbooks with a different team member.
-3. Confirm the production-incident runbook's escalation path has actually been tested (a real page/alert reaches the named person).
-4. Review the support handover checklist against the PRD's Section 12.4 line by line — confirm every item is checked, not assumed.
+### 🛑 Stop and review (gate before next step — this is the final gate before the ship checklist below)
+1. Run the full `tests/authz.test.ts` suite and review it module-by-module against `04-architecture.md`'s module list for coverage gaps.
+2. Trigger a burst of test errors in a staging environment and confirm a Sentry alert fires and reaches whoever's on call.
+3. Dry-run each of the three runbooks (webhook miss, job failure, authorization gap) with a teammate who didn't write them — confirm they're followable without additional context.
+4. Walk the full signup → onboard → subscribe → bill → approve → pay path manually one final time, end to end, on the production deployment.
+5. Pull the last 4 weeks of uptime data from Fly.io/Sentry and confirm it meets or exceeds 99.5%.
 
 ---
 
 ## Final ship checklist
 
-- [ ] Step 01: CI/CD pipeline deploys to staging automatically, production requires manual approval.
-- [ ] Step 02: All 19 core entities migrated, seeded, zero `Float` money fields.
-- [ ] Step 03: 100% of API endpoints covered by authorization tests; cross-office access verified blocked and audit-logged.
-- [ ] Step 04: An Admin can onboard and activate a real office without touching a generic expense form.
-- [ ] Step 05: Trial starts at signup with no card required; `/app/subscribe` correctly activates a paid plan and gates access on trial expiry.
-- [ ] Step 06: Platform Operator can manage org subscription/tenant status via `/platform`; no customer session can reach it; suspension blocks access independent of subscription status.
-- [ ] Step 07: Recurring Obligation Engine generates instances ahead of due dates; Missing Bill Alert fires correctly.
-- [ ] Step 08: Full bill lifecycle (enter → approve → pay → close) works with enforced segregation of duties.
-- [ ] Step 09: Lease/rent obligations auto-generate; TDS calculation verified accurate against a test matrix.
-- [ ] Step 10: Vendor/AMC, Maintenance, Asset, and Compliance modules all functional with their respective escalation paths.
-- [ ] Step 11: Every dashboard reads live data only; zero mocked KPIs reachable in any non-test environment.
-- [ ] Step 12: Every route has a tested loading/empty/error state; WCAG 2.1 AA accessibility score ≥ 90 on key pages.
-- [ ] Step 13: Production deployed, isolated from staging, meeting the PRD's stated NFRs under load test.
-- [ ] Step 14: All 5 runbooks written, simulated, and exercised by someone other than the original builder.
-- [ ] At least one design-partner organization has completed a full billing cycle (bill → approval → payment → closed) in production.
-- [ ] Setup Completion % for that design partner's first office is ≥ 90%.
+- [ ] `wasp deploy fly launch` pipeline live, both the AddMin App and `addmin-marketing/` independently deployable (Step 01, 10).
+- [ ] All 22 entities from `04-architecture.md` migrated cleanly in production with `org_id` scoping verified (Step 02).
+- [ ] Signup → email verification → MFA → login works end to end, and every operation enforces role/office scope server-side (Step 03).
+- [ ] Full onboarding wizard (F-04) completes and an office can be activated (Step 04).
+- [ ] Stripe Checkout + webhook confirmed working in live (not test) mode, trial-to-paid conversion verified against the real Stripe dashboard (Step 05).
+- [ ] Platform Operator console (`/platform/*`) is provably unreachable by any customer session (Step 05).
+- [ ] Obligation Engine generating instances ahead of due dates and flagging missing ones across utility, lease, AMC, and compliance (Step 06, 08).
+- [ ] Full bill lifecycle (draft → approve → pay → close) with maker-checker enforcement passes a live end-to-end test (Step 07).
+- [ ] All P0 domain modules (lease, vendor, facility, asset, compliance) live with real recurring obligations attached (Step 08).
+- [ ] Office Home, My Actions, and Executive Dashboard load under 3 seconds at 50-office/20,000-record scale with zero dummy data anywhere (Step 09).
+- [ ] Marketing site's every "Start Free Trial" CTA correctly lands in the live product's `/signup?plan=` flow, and pricing matches Stripe exactly (Step 10).
+- [ ] Full authorization test suite passing at 100% in CI, covering every module (Step 11).
+- [ ] Sentry alerting configured and dry-run tested; runbooks written and dry-run tested for webhook miss, job failure, and authorization gap (Step 11).
+- [ ] Zero P0 bugs open anywhere in the signup-to-payment path (Step 11).
 
 ## What to do when a step fails
 
-1. **Don't skip ahead.** Each step is a foundation. Skipping creates a debt you'll pay 10x later — Step 08's approval workflow debugging is much harder if you're not sure whether Step 03's authorization layer or Step 07's obligation engine is the actual source of a bug.
-2. **Re-read the dependency.** Most failures are caused by a missed input from the prior step — check the "Inputs" section of the failing step against what the prior step's "Outputs" actually produced.
-3. **Check the pitfalls list first** — it exists because a specific, named failure mode was anticipated for this exact step; check there before assuming you've found a novel bug.
-4. **Bisect the failing rubric item.** Identify the smallest change that broke it; revert if needed rather than debugging forward from a known-broken state.
-5. **If still stuck**, paste the failing rubric item into your AI coding tool with this playbook file open, and reference the specific blueprint stage (e.g., "see 04-architecture.md's ObligationInstance status enum") so the context carries over rather than getting re-derived incorrectly.
+1. **Don't skip ahead.** Each step is a foundation. Skipping creates a debt you'll pay 10x later — a leaking RBAC gate discovered in Step 09 means re-auditing every operation written since Step 04.
+2. **Re-read the dependency.** Most failures are caused by a missed input from the prior step — a job failing at runtime is very often a missing `entities` declaration in `main.wasp` from Step 02 or 06, not new business logic.
+3. **Check the pitfalls list first** — it exists because someone shipped a bug there before; every pitfall in this playbook is tied to a specific acceptance-criteria failure mode named in `05-features.md`.
+4. **Bisect the failing rubric item.** Identify the smallest change that broke it; revert if needed rather than layering a fix on top of an unclear cause.
+5. **If still stuck**, paste the failing rubric item into Claude Code with this playbook open. Reference `08-build-playbook.md` by name and the specific step number so Claude has full context, not just the error message.
 
 ## Why this playbook is different from generic build prompts
 
-This playbook is specific to AddMin's actual entities, feature IDs, and route paths — every step references real names from `04-architecture.md` (RecurringObligationSchedule, ObligationInstance), `05-features.md` (F-01 through F-18), and `06-frontend.md` (the exact route paths and component names), not generic placeholders. A generic "build the auth system" instruction gives you no way to verify you built the *specific* authorization model this PRD requires — office-scoped, segregation-of-duties-enforced, server-side-checked.
+Every step here references real entities, feature IDs, and route paths from `04-architecture.md` through `09-marketing-website.md` — "build F-07's Recurring Obligation Schedule & Instance Engine" is a different instruction than "build the background jobs," and the difference is what makes a step's acceptance rubric checkable in under 60 seconds instead of debated.
 
-It sequences leaf to root because that is the actual dependency reality of this system: you cannot correctly build the bill-approval workflow (Step 08) before the authorization layer (Step 03) it depends on for segregation-of-duties enforcement, and you cannot build a truthful Executive Dashboard (Step 11) before the transactional modules (Steps 05-08) whose data it aggregates actually exist.
+The sequence is leaf to root by genuine dependency, not by feature priority alone: auth before onboarding, onboarding before billing, billing before the obligation engine, the obligation engine before every domain feature that reuses it, and reporting last because it has nothing real to aggregate until everything else exists. Skipping or reordering steps breaks an assumption a later step's implementation details rely on.
 
-It gates with observable rubrics because "I think this works" is not the same claim as "I verified this works," and the difference between those two claims is exactly where B2B financial-workflow software goes wrong in front of a paying customer. If a step in this playbook feels generic to you as you work through it, that's a signal you're missing context — go back and re-read the relevant blueprint stage (01 through 07) before continuing, rather than guessing at what "good" looks like.
+Every step ends in a gate with concrete, runnable verification steps — not "make sure it works," but "run this suite, click this button, check this database row." A step that hasn't passed its gate is not done, no matter how much of its code exists.
+
+If a step feels generic, you're missing context — re-read the relevant blueprint stage (`04-architecture.md` for entities/API surface, `05-features.md` for acceptance criteria, `06-frontend.md` for routes, `07-phases.md` for sequencing rationale) before treating the step as ambiguous.
