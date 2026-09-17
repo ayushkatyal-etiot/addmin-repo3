@@ -1,0 +1,275 @@
+# Frontend blueprint — AddMin
+
+Information architecture below follows the left-sidebar, wizard-based pattern already decided in the source design notes (`docs/Screenshot 2026-09-16 at 6.45.14 PM.png`): group by domain, one wizard per multi-field setup flow, persistent sidebar, never show 20 fields at once.
+
+## Routes (sitemap)
+
+```
+PUBLIC
+  /                              Landing page                                   no
+  /pricing                       Pricing                                        no
+  /signin                        Login (matches addmin-site's header "Sign in") no   F-01
+  /signup                        Signup; marketing site's "Start Free Trial"    no   F-01
+                                 CTA and pricing plan buttons land here, with
+                                 an optional ?plan= query param
+  /verify-email                  Email verification confirmation                no   F-01
+  /mfa-setup                     MFA enrollment (TOTP QR)                       no   F-01
+
+APP (auth required)
+  /app                           Redirects to Office Home, or to /app/subscribe yes  F-18
+                                 if the org's trial expired with no active plan
+  /app/onboarding                Guided Office Onboarding wizard                yes  F-04, F-05
+  /app/subscribe                 Plan selection + payment method, trial→paid    yes  F-19
+                                 (reads ?plan= carried from /signup)
+  /app/offices                   Office list with setup status                  yes  F-03
+  /app/offices/new               Add Office form                                yes  F-03
+  /app/offices/[officeId]        Office Home                                    yes  F-18
+  /app/offices/[officeId]/setup  Setup review / completion %                    yes  F-05
+  /app/my-actions                My Actions queue (cross-module)                yes  F-18
+
+  /app/utilities                 Utility connections list                      yes  F-06
+  /app/utilities/new             Utility connection wizard                     yes  F-06
+  /app/utilities/[id]            Utility connection detail + bill history      yes  F-06, F-07
+  /app/bills                     Bill register (filterable)                    yes  F-09
+  /app/bills/new                 Bill entry / bulk entry                       yes  F-09
+  /app/bills/[id]                Bill detail (approval / payment actions)      yes  F-09, F-10, F-11
+  /app/approvals                 Approval queue (Checker)                      yes  F-10
+  /app/payments                  Payment queue + history                      yes  F-11
+
+  /app/property/landlords        Landlord list                                 yes  F-12
+  /app/property/leases           Lease list                                    yes  F-12
+  /app/property/leases/new       Lease Setup wizard                            yes  F-12
+  /app/property/leases/[id]      Lease detail (rent schedule, CAM, TDS)        yes  F-12, F-13
+
+  /app/vendors                   Vendor register                               yes  F-14
+  /app/vendors/new               Vendor registration form                      yes  F-14
+  /app/vendors/[id]              Vendor profile (documents, AMC, performance)  yes  F-14
+
+  /app/maintenance                Maintenance request list                     yes  F-15
+  /app/maintenance/new            Log maintenance request                      yes  F-15
+  /app/maintenance/[id]           Request detail + work order + evidence      yes  F-15
+
+  /app/assets                    Asset register                                yes  F-16
+  /app/assets/[id]                Asset detail (custody, warranty, service)   yes  F-16
+  /app/asset-requests             Asset request queue                          yes  F-16
+  /app/asset-requests/new         Employee asset request form                  yes  F-16
+
+  /app/compliance                 Compliance register                          yes  F-17
+  /app/compliance/[id]             Certificate detail + upload/renew           yes  F-17
+
+  /app/reports                    Reports index                                yes  F-18
+  /app/reports/executive           Executive Dashboard                         yes  F-18
+  /app/reports/utility-cost        Utility Cost Dashboard                      yes  F-18
+  /app/reports/compliance          Compliance Dashboard                        yes  F-17, F-18
+  /app/reports/vendor              Vendor Dashboard                            yes  F-14, F-18
+
+ADMIN (Platform Administrator role)
+  /admin/users                    User management + invite                     yes  F-02
+  /admin/roles                    Role & office scope assignment               yes  F-02
+  /admin/masters                  Utility/Facility/Compliance/Vendor masters   yes  F-03, F-04
+  /admin/workflow                 Approval routing / authorization limits      yes  F-10, F-11
+  /admin/notifications             Notification rule configuration             yes  F-08, F-12, F-17
+  /admin/audit-logs                Audit trail search                          yes  F-02
+
+PLATFORM OPS (Platform Operator only — separate login, no customer role can reach this tree)
+  /platform/signin                 Platform Operator login (separate from /signin) no  F-20
+  /platform/organizations          List every org: plan, status, tenant_status  yes  F-20
+  /platform/organizations/[orgId]  Org detail: set plan/status, suspend/reactivate yes F-20
+  /platform/audit-logs             Platform-level audit trail (PO actions only) yes  F-20
+```
+
+## Page specs (top 8 routes)
+
+### /app/offices/[officeId] (Office Home)
+- **Hero / above-fold**: A summary strip showing Setup Completion %, count of overdue items, pending approvals, and upcoming renewals for this specific office.
+- **Sections**: (1) Status strip (Setup %, Overdue, Pending Approval, Upcoming Renewals), (2) My Actions for this office, (3) Utilities summary card, (4) Lease/Property summary card, (5) Compliance status card, (6) Vendor/AMC summary card, (7) Recent activity feed.
+- **Components used**: `<PageHeader>`, `<Stat>`, `<ProgressBar>`, `<ActionQueueItem>`, `<ObligationCard>`, `<ComplianceStatusBadge>`, `<EmptyState>`, `<Sidebar>`.
+- **Data fetched**: `GET /api/dashboards/office-home/:officeId`, `GET /api/obligations/instances?officeId=`.
+- **Empty state**: Newly activated office with no obligations yet shows a "You're all set — obligations will appear here as they come due" message, not a blank grid.
+- **Loading state**: Skeleton cards matching the section layout (server component streaming per section).
+- **Error state**: Section-level error boundary — one card failing to load shows an inline retry, doesn't blank the whole page.
+
+### /app/onboarding (Guided Office Onboarding wizard)
+- **Hero / above-fold**: Step indicator (Org → Office → Owned/Rented → Utilities → Facilities → Compliance → Vendors → Assets → Roles → Review → Activate) with the current step's form.
+- **Sections**: One section per wizard step, progressive disclosure — only the active step's fields are visible.
+- **Components used**: `<WizardStepper>`, `<ChecklistItem>`, `<YesNoNAToggle>`, `<FileUpload>`, `<FormError>`, `<Select>`, `<TextInput>`, `<DatePicker>`.
+- **Data fetched**: `GET /api/offices/:id/checklist`, `PATCH /api/offices/:id/checklist/:itemId`.
+- **Empty state**: N/A — checklist is always pre-populated from `OfficeChecklistTemplate`, never blank.
+- **Loading state**: Step content shows a skeleton form while checklist state loads; stepper itself renders immediately.
+- **Error state**: Inline `<FormError>` per field; step-level save failure keeps the user on the same step with entered data intact.
+
+### /app/subscribe (Plan selection + subscription activation)
+- **Hero / above-fold**: The three plans from `addmin-site/content/pricing.md` (Starter, Growth, Enterprise) as cards, with the plan named in the `?plan=` query param (carried through from the marketing site's CTA) pre-selected.
+- **Sections**: (1) Plan cards with feature comparison, (2) Trial status banner (days remaining, or "trial expired" state), (3) Payment method form, (4) Confirm & Activate action.
+- **Components used**: `<PlanCard>`, `<TrialBanner>`, `<TextInput>`, `<FormError>`, `<Button>`.
+- **Data fetched**: `GET /api/billing/subscription`, `POST /api/billing/subscribe`.
+- **Empty state**: N/A — always shows the three plans and current subscription status.
+- **Loading state**: Skeleton plan cards while subscription status loads.
+- **Error state**: A declined payment method shows the billing provider's specific error inline on the payment form; the user's plan selection is preserved, not reset.
+
+### /app/offices/[officeId]/setup (Setup review / completion %)
+- **Hero / above-fold**: Large Setup Completion % ring/bar with a category breakdown (Utilities, Facilities, Compliance, Vendors, Assets, Roles).
+- **Sections**: (1) Completion summary, (2) Category-by-category checklist with jump links, (3) Missing mandatory items list, (4) Activate Office CTA (disabled until ready).
+- **Components used**: `<ProgressBar>`, `<ChecklistItem>`, `<Badge>`, `<Button>` (primary/disabled states), `<EmptyState>`.
+- **Data fetched**: `GET /api/offices/:id/checklist`, `POST /api/offices/:id/activate`.
+- **Empty state**: N/A — always shows checklist state.
+- **Loading state**: Skeleton progress ring + list.
+- **Error state**: Activation attempt with unmet dependencies shows a blocking toast listing exactly which items are missing.
+
+### /app/bills/[id] (Bill detail)
+- **Hero / above-fold**: Bill status badge (Draft/Pending Approval/Approved/Paid/Overdue) with amount and due date prominent.
+- **Sections**: (1) Bill details (period, amount, invoice), (2) Linked obligation instance, (3) Approval history/actions, (4) Payment history/actions, (5) Audit trail.
+- **Components used**: `<StatusBadge>`, `<DataTable>`, `<ApprovalActionBar>`, `<PaymentForm>`, `<FileUpload>`, `<AuditTrailList>`.
+- **Data fetched**: bill detail endpoint, `POST /api/utility-bills/:id/approve`, `POST /api/payments`, `GET /api/audit-logs/:entityType/:entityId`.
+- **Empty state**: No payment recorded yet shows "Awaiting payment" state instead of an empty table.
+- **Loading state**: Skeleton detail card.
+- **Error state**: Approval/payment action failures show inline error near the action bar, not a full-page error.
+
+### /app/approvals (Approval queue)
+- **Hero / above-fold**: A filterable table of bills/items pending the current Checker's approval, sorted by due date.
+- **Sections**: (1) Filter bar (office/utility/amount), (2) Queue table, (3) Bulk-select approval actions (P2, not P0), (4) Empty state when queue is clear.
+- **Components used**: `<DataTable>`, `<FilterBar>`, `<StatusBadge>`, `<EmptyState>`, `<ApprovalActionBar>`.
+- **Data fetched**: `GET /api/obligations/instances?status=pending_approval&assignedTo=me`.
+- **Empty state**: "Nothing pending your approval" with a link back to Office Home.
+- **Loading state**: Table skeleton rows.
+- **Error state**: Failed row action shows inline row-level error without losing table scroll position.
+
+### /app/property/leases/new (Lease Setup wizard)
+- **Hero / above-fold**: Step indicator (Owned/Rented → Landlord → Lease Terms → Review) matching the source design's Lease Setup Wizard pattern.
+- **Sections**: One per wizard step — Owned/Rented branch, landlord select/create, lease term fields (rent, CAM, deposit, escalation), document upload, review.
+- **Components used**: `<WizardStepper>`, `<Select>` (landlord picker), `<TextInput>`, `<DatePicker>`, `<FileUpload>`, `<FormError>`.
+- **Data fetched**: `POST /api/leases`, landlord list endpoint.
+- **Empty state**: No existing landlords — inline "create new landlord" form appears instead of an empty dropdown.
+- **Loading state**: Step skeleton, consistent with onboarding wizard.
+- **Error state**: Lease end date before start date shows inline validation error before submission.
+
+### /app/reports/executive (Executive Dashboard)
+- **Hero / above-fold**: Cross-office KPI row — total spend, overdue count, pending renewals, compliance gaps, AMC due.
+- **Sections**: (1) KPI row, (2) Filters (office/module/period), (3) Spend trend chart, (4) Renewal pipeline table, (5) Compliance gap summary, (6) Export button.
+- **Components used**: `<Stat>`, `<FilterBar>`, `<TrendChart>`, `<DataTable>`, `<Badge>`, `<ExportButton>`.
+- **Data fetched**: `GET /api/dashboards/executive`.
+- **Empty state**: No offices activated yet — shows "Activate your first office to see data here" instead of zeroed charts.
+- **Loading state**: Skeleton KPI cards + chart placeholder.
+- **Error state**: Chart data fetch failure shows a retry button in place of the chart, other KPIs unaffected.
+
+### /app/compliance (Compliance register)
+- **Hero / above-fold**: A status-grouped list (Valid/Expiring/Expired/Missing) across all offices the user can see.
+- **Sections**: (1) Status filter tabs, (2) Office filter, (3) Certificate table with expiry countdown, (4) Upcoming inspection calendar (P1, stub in P0).
+- **Components used**: `<Tabs>`, `<FilterBar>`, `<DataTable>`, `<ComplianceStatusBadge>`, `<EmptyState>`.
+- **Data fetched**: compliance list endpoint, filterable by office/status.
+- **Empty state**: No compliance items configured — links back to the relevant office's onboarding checklist.
+- **Loading state**: Table skeleton.
+- **Error state**: Inline retry banner above the table on fetch failure.
+
+### /platform/organizations (Platform Operator org list)
+- **Hero / above-fold**: A table of every customer Organization with plan, Subscription status, tenant_status, and trial_ends_at columns — no customer-facing branding or navigation chrome, since this is never seen by a customer.
+- **Sections**: (1) Search/filter bar (name, subscription status), (2) Org table, (3) Row click opens org detail.
+- **Components used**: `<DataTable>`, `<FilterBar>`, `<StatusBadge>`, `<TenantStatusToggle>`.
+- **Data fetched**: `GET /internal/organizations`.
+- **Empty state**: N/A in practice (would only occur pre-launch with zero orgs) — shows a plain "No organizations yet" row.
+- **Loading state**: Table skeleton rows.
+- **Error state**: Full-page retry banner — if this page can't load, there's nothing else useful to show a Platform Operator.
+
+## Wireframes (text-form)
+
+```
+/app/offices/[officeId]  (Office Home)
+┌──────────────────────────────────────────────────────────────┐
+│ [Sidebar]  │  Office: Mumbai HQ            [Setup: 92%] [⚡]  │
+│            ├──────────────────────────────────────────────── │
+│ Setup      │  Overdue: 2   Pending Approval: 4   Renewals: 1 │
+│ Utilities  │                                                 │
+│ Property   │  My Actions                                     │
+│ Compliance │  ┌────────────────────────────────────────────┐ │
+│ Facilities │  │ ⚠ Electricity bill overdue — Mumbai HQ      │ │
+│ Vendors    │  │ ⏳ Lease renewal due in 45 days              │ │
+│ Assets     │  │ ✔ Fire NOC expiring in 20 days              │ │
+│ Reports    │  └────────────────────────────────────────────┘ │
+│            │                                                 │
+│            │  [Utilities card] [Property card] [Compliance] │
+└──────────────────────────────────────────────────────────────┘
+```
+
+```
+/app/onboarding  (Guided Office Onboarding wizard)
+┌──────────────────────────────────────────────────────────────┐
+│  ①Org ②Office ③Owned/Rented ④Utilities ⑤Facilities ⑥Compliance│
+│  ⑦Vendors ⑧Assets ⑨Roles ⑩Review ⑪Activate                    │
+├──────────────────────────────────────────────────────────────┤
+│  Step 4 — Utility Checklist                                   │
+│                                                                │
+│  ☐ Electricity   [Yes] [No] [N/A]                             │
+│  ☐ Water         [Yes] [No] [N/A]                             │
+│  ☐ Internet      [Yes] [No] [N/A]                             │
+│  ☐ DG            [Yes] [No] [N/A]                              │
+│                                                                │
+│                              [Back]           [Save & Next]   │
+└──────────────────────────────────────────────────────────────┘
+```
+
+```
+/app/bills/[id]  (Bill detail)
+┌──────────────────────────────────────────────────────────────┐
+│ [Sidebar]  │  Electricity Bill — Sep 2026    [Pending Approval]│
+│            ├──────────────────────────────────────────────── │
+│            │  Amount: ₹42,500   Due: 2026-09-30               │
+│            │  Invoice: [view PDF]                             │
+│            │                                                  │
+│            │  Approval History                                │
+│            │  ┌────────────────────────────────────────────┐ │
+│            │  │ Submitted by Priya — 2026-09-18              │ │
+│            │  └────────────────────────────────────────────┘ │
+│            │                                                  │
+│            │  [Approve]  [Return]  [Reject]                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Component tree (12-25 reusable components)
+
+**Layout**
+- `<Sidebar>` — persistent left navigation grouped by domain section; props: `sections`, `activeRoute`.
+- `<PageHeader>` — page title + breadcrumb + primary action button; props: `title`, `breadcrumbs`, `actions`.
+- `<WorkspaceSwitcher>` — office/org context switcher when user has multiple scopes; props: `memberships`, `activeId`.
+- `<TopBar>` — global search + notifications bell + avatar menu; props: `user`, `notificationCount`.
+
+**Form**
+- `<WizardStepper>` — multi-step progress indicator + step navigation; props: `steps`, `currentStep`, `onStepChange`.
+- `<ChecklistItem>` — single onboarding checklist row with applicability toggle; props: `label`, `value`, `onChange`, `linkedStatus`.
+- `<YesNoNAToggle>` — three-state toggle for checklist applicability; props: `value`, `onChange`.
+- `<TextInput>` / `<Select>` / `<DatePicker>` / `<FileUpload>` — standard form primitives; props: `label`, `value`, `onChange`, `error`, `required`.
+- `<FormError>` — inline field-level error message; props: `message`.
+
+**Data display**
+- `<DataTable>` — sortable/filterable table with row actions; props: `columns`, `rows`, `onRowClick`, `pagination`.
+- `<Stat>` — single KPI number + label + trend indicator; props: `label`, `value`, `trend`, `onClick` (drill-down).
+- `<ProgressBar>` — used for Setup Completion %; props: `value`, `max`, `label`.
+- `<StatusBadge>` — colored status pill (bill/lease/compliance/AMC states); props: `status`, `variant`.
+- `<ComplianceStatusBadge>` — specialized badge with expiry countdown; props: `status`, `expiryDate`.
+- `<EmptyState>` — icon + message + optional CTA for zero-data views; props: `title`, `description`, `action`.
+- `<TrendChart>` — month-on-month/year-on-year line/bar chart; props: `data`, `granularity`.
+- `<FilterBar>` — combinable office/module/period/status filters synced to URL; props: `filters`, `onChange`.
+
+**Domain**
+- `<ObligationCard>` — summarizes a recurring obligation's next due instance; props: `obligation`, `status`.
+- `<ActionQueueItem>` — single My Actions row across any module; props: `item`, `onOpen`.
+- `<ApprovalActionBar>` — Approve/Reject/Return buttons with mandatory remark modal; props: `onApprove`, `onReject`, `onReturn`.
+- `<PaymentForm>` — payment recording form (date/amount/mode/reference/proof); props: `bill`, `authorizationLimit`, `onSubmit`.
+- `<AuditTrailList>` — chronological before/after change list; props: `entries`.
+- `<PlanCard>` — a single subscription plan (Starter/Growth/Enterprise) with price, feature list, and select action; props: `plan`, `isSelected`, `onSelect`.
+- `<TrialBanner>` — persistent trial-days-remaining or trial-expired banner shown across `/app` until the org subscribes; props: `subscription`, `onSubscribeClick`.
+- `<TenantStatusToggle>` — Platform Operator-only active/suspend control with a confirmation step; props: `org`, `onStatusChange`. Never rendered outside `/platform`.
+
+## Design system
+
+- **Colors**: Brand primary `#D97706` (amber, matches the source design's warm accent), neutral scale `#0F172A` → `#F8FAFC` (5 stops), semantic — success `#16A34A`, warning `#D97706`, error `#DC2626`, info `#2563EB`.
+- **Typography**: H1 32px/40px, H2 24px/32px, H3 20px/28px, H4 16px/24px, body 14px/20px, caption 12px/16px, mono (for reference numbers/IDs) via JetBrains Mono. Primary typeface: Inter.
+- **Spacing scale**: 4 / 8 / 12 / 16 / 24 / 32 / 48 / 64.
+- **Radius**: 4px (chips/badges), 8px (buttons/inputs), 12px (cards), 16px (modals).
+- **Shadow**: subtle (`0 1px 2px rgba(0,0,0,0.05)` for cards), medium (`0 4px 12px rgba(0,0,0,0.08)` for dropdowns/popovers), dramatic (`0 12px 32px rgba(0,0,0,0.16)` for modals).
+- **Motion**: `cubic-bezier(.2,.7,.2,1)`, 0.2s for micro-interactions (toggles, badges), 0.3s for step transitions in wizards.
+
+## Responsive grid
+
+- **Mobile (≤640px)**: Single column, sidebar collapses to a bottom nav or hamburger drawer; wizards show one field group per screen with sticky Back/Next.
+- **Tablet (641–1024px)**: 2-column card grids (e.g., Office Home summary cards), sidebar collapses to icon-only rail.
+- **Desktop (≥1025px)**: Max-width 1280px content area, persistent full-width sidebar from 1280px+, 3-column card grids where natural (e.g., dashboard KPI rows).
