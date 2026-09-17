@@ -42,6 +42,7 @@ export const seedDevData: DbSeedFn = async (prisma) => {
     create: {
       id: SEED_OFFICE_ID,
       org_id: org.id,
+      code: "SEED-HQ",
       name: "Seed HQ",
       address: "1 Seed Street",
       office_type: "head_office",

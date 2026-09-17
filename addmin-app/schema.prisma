@@ -170,6 +170,11 @@ enum SubscriptionStatus {
 model Office {
   id             String            @id @default(uuid())
   org_id         String
+  // Not in 04-architecture.md's original data model -- added in Build Step
+  // 04 because F-03's acceptance criteria requires "Office code is unique
+  // within an organization" (used for CSV bulk import row dedup). See
+  // migrations/*_step04_onboarding for the backfill of pre-existing rows.
+  code           String
   name           String
   address        String
   office_type    OfficeType
@@ -188,6 +193,7 @@ model Office {
   complianceItems  ComplianceItem[]
 
   @@index([org_id])
+  @@unique([org_id, code])
 }
 
 enum OfficeType {

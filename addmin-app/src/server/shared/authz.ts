@@ -3,7 +3,7 @@ import type { AuthUser } from "wasp/auth";
 import type { PrismaClient } from "@prisma/client";
 import { isMfaCurrentlyVerified, MFA_REQUIRED_ROLES } from "../auth/mfa";
 
-type Role = NonNullable<AuthUser["role"]>;
+export type Role = NonNullable<AuthUser["role"]>;
 
 /**
  * Every operation's first line. Throws (never silently filters) so a scope

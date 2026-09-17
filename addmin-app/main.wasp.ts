@@ -23,6 +23,20 @@ import {
   platformLogout,
   platformMe,
 } from "./src/server/platform/platformAuth" with { type: "ref" };
+import {
+  updateOrganizationProfile,
+  createOffice,
+  bulkImportOffices,
+  listOffices,
+  getOffice,
+  listOrgUsers,
+} from "./src/server/organization/office" with { type: "ref" };
+import { getOfficeChecklist, updateChecklistItem } from "./src/server/onboarding/checklist" with { type: "ref" };
+import { activateOffice } from "./src/server/onboarding/activation" with { type: "ref" };
+import { OnboardingPage } from "./src/client/onboarding/OnboardingPage" with { type: "ref" };
+import { OfficeListPage } from "./src/client/offices/OfficeListPage" with { type: "ref" };
+import { NewOfficePage } from "./src/client/offices/NewOfficePage" with { type: "ref" };
+import { OfficeSetupPage } from "./src/client/offices/OfficeSetupPage" with { type: "ref" };
 
 // Build Step 01/02/03 (planmysaas-blueprint/08-build-playbook.md): repo bootstrap,
 // data layer, auth/RBAC/Platform Operator identity. Domain query/action/job
@@ -105,5 +119,25 @@ export default app({
       entities: ["PlatformOperator"],
       auth: false,
     }),
+
+    // Organization & Office Module + Onboarding Module (04-architecture.md,
+    // Build Step 04) -- F-03, F-04, F-05.
+    route("OnboardingRoute", "/app/onboarding", page(OnboardingPage, { authRequired: true })),
+    route("OfficesRoute", "/app/offices", page(OfficeListPage, { authRequired: true })),
+    route("NewOfficeRoute", "/app/offices/new", page(NewOfficePage, { authRequired: true })),
+    route("OfficeSetupRoute", "/app/offices/:officeId/setup", page(OfficeSetupPage, { authRequired: true })),
+    action(updateOrganizationProfile, { entities: ["Organization", "AuditLog"] }),
+    action(createOffice, { entities: ["Office", "OfficeSetupProfile", "OfficeChecklistItem", "AuditLog"] }),
+    action(bulkImportOffices, { entities: ["Office", "OfficeSetupProfile", "OfficeChecklistItem", "AuditLog"] }),
+    query(listOffices, { entities: ["Office", "AuditLog"] }),
+    query(getOffice, { entities: ["Office", "AuditLog"] }),
+    query(listOrgUsers, { entities: ["User", "AuditLog"] }),
+    query(getOfficeChecklist, {
+      entities: ["Office", "OfficeSetupProfile", "OfficeChecklistItem", "AuditLog"],
+    }),
+    action(updateChecklistItem, {
+      entities: ["OfficeChecklistItem", "OfficeSetupProfile", "User", "AuditLog"],
+    }),
+    action(activateOffice, { entities: ["Office", "OfficeSetupProfile", "OfficeChecklistItem", "AuditLog"] }),
   ],
 });
