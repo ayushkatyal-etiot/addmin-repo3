@@ -48,6 +48,11 @@ model User {
   // Set by verifyMfaCode succeeding; authz.ts requires this to be in the
   // future for any mfa_enabled user, on every request -- see mfa.ts.
   mfa_verified_until DateTime?
+  // Not in 04-architecture.md's original data model -- added in Build Step
+  // 07 because F-11 requires a Payment Authorizer's recorded payment to be
+  // blocked server-side once it exceeds their configured limit. Null = no
+  // limit configured (org admin sets one via /admin/workflow's approver setup).
+  authorization_limit Decimal?
 
   organization Organization? @relation(fields: [org_id], references: [id])
 
@@ -57,6 +62,11 @@ model User {
   paymentsAuthorized           Payment[]                @relation("PaymentAuthorizedBy")
   auditLogs                    AuditLog[]               @relation("AuditLogActor")
   invitesSent                  Invite[]                 @relation("InviteInvitedBy")
+  obligationInstancesWaived    ObligationInstance[]     @relation("ObligationInstanceWaivedBy")
+  utilityBillsCreated          UtilityBill[]            @relation("UtilityBillCreatedBy")
+  workflowDefinitionsAssigned  WorkflowDefinition[]     @relation("WorkflowApprover")
+  approvalStepsAssigned        ApprovalStep[]           @relation("ApprovalStepApprover")
+  vendorPerformanceReviewsGiven VendorPerformanceReview[] @relation("VendorPerformanceReviewedBy")
 
   @@index([org_id])
 }
@@ -84,6 +94,8 @@ model PlatformOperator {
   mfa_secret         String?
   mfa_verified_until DateTime?
   created_at         DateTime  @default(now())
+
+  auditLogs AuditLog[]
 }
 
 // Not in 04-architecture.md's original data model -- added in Build Step 03
@@ -125,6 +137,10 @@ model Organization {
   timezone         String
   tenant_status    OrganizationTenantStatus   @default(active)
   created_at       DateTime                   @default(now())
+  // F-13: org-wide default TDS rate on rent, overridable per Landlord
+  // (Landlord.tds_rate_pct). Null until Finance/CA configures it -- see
+  // src/server/property/rentPayment.ts's block-if-unconfigured rule.
+  default_tds_rate_pct Decimal?
 
   subscription Subscription?
   offices      Office[]
@@ -191,6 +207,7 @@ model Office {
   assets           Asset[]
   maintenanceRequests MaintenanceRequest[]
   complianceItems  ComplianceItem[]
+  workflowDefinitions WorkflowDefinition[]
 
   @@index([org_id])
   @@unique([org_id, code])
@@ -371,11 +388,20 @@ model ObligationInstance {
   status            ObligationInstanceStatus
   linked_ref_type   String?
   linked_ref_id     String?
+  // Not in 04-architecture.md's original data model -- added in Build Step
+  // 06 because F-08's acceptance criteria requires "Waiving a Missing item
+  // requires a remark and is recorded in AuditLog" (the AuditLog entry alone
+  // doesn't let the UI show "waived by X, because Y" without a second query).
+  waived_by         String?
+  waived_remark     String?
+  waived_at         DateTime?
 
   schedule RecurringObligationSchedule @relation(fields: [schedule_id], references: [id])
+  waivedBy User?                       @relation("ObligationInstanceWaivedBy", fields: [waived_by], references: [id])
 
   bill UtilityBill?
 
+  @@unique([schedule_id, period])
   @@index([org_id])
 }
 
@@ -386,6 +412,7 @@ enum ObligationInstanceStatus {
   in_process
   closed
   cancelled
+  waived
 }
 
 model UtilityBill {
@@ -400,11 +427,17 @@ model UtilityBill {
   // References Document (Document Module, 04-architecture.md) -- not yet
   // modeled, see file header. Plain id, not a Prisma relation, for now.
   invoice_doc_id          String?
+  // Not in 04-architecture.md's original data model -- added in Build Step
+  // 07 because F-10's maker-checker rule ("the same user cannot be both
+  // Maker and Checker on the same bill") needs to know who the Maker was.
+  created_by              String?
 
   utilityAccount     UtilityAccount      @relation(fields: [utility_account_id], references: [id])
   obligationInstance ObligationInstance? @relation(fields: [obligation_instance_id], references: [id])
+  createdBy          User?               @relation("UtilityBillCreatedBy", fields: [created_by], references: [id])
 
-  payments Payment[]
+  payments      Payment[]
+  approvalSteps ApprovalStep[]
 
   @@index([org_id])
 }
@@ -419,6 +452,71 @@ enum UtilityBillStatus {
   overdue
 }
 
+// --- Workflow & Approval Module ------------------------------------------
+// Owns WorkflowDefinition/ApprovalStep/ApprovalAction per 04-architecture.md's
+// module list, but (like Document and AssetAssignment elsewhere in this file)
+// 04-architecture.md never gives these field-level definitions -- designed
+// here in Build Step 07 against F-10/F-11's acceptance rubric instead.
+// ApprovalAction is folded into ApprovalStep (status/remark/acted_at on the
+// same row) rather than a separate table -- one step is acted on at most
+// once, so a separate action-log table would just mirror this one.
+
+// One threshold tier for an office+scope combination: bills up to max_amount
+// (null = uncapped, the catch-all top tier) route to approver_user_id.
+// office_id null = org-wide default, used when no office-specific tier
+// matches. scope_type reuses ObligationScopeType since the same engine
+// generalizes to Lease/AMC/Compliance approvals in Step 08.
+model WorkflowDefinition {
+  id                String              @id @default(uuid())
+  org_id            String
+  office_id         String?
+  scope_type        ObligationScopeType
+  tier              Int
+  max_amount        Decimal?
+  approver_user_id  String
+
+  office   Office? @relation(fields: [office_id], references: [id])
+  approver User    @relation("WorkflowApprover", fields: [approver_user_id], references: [id])
+
+  @@index([org_id])
+  @@unique([org_id, office_id, scope_type, tier])
+}
+
+// payable_type/payable_id is the same polymorphic pattern as Payment above --
+// not a typed FK, so Step 08's Lease/AMC/Compliance approvals can reuse this
+// table without payable_id being constrained to one entity. utility_bill_id
+// is the convenience typed FK for today's only payable_type.
+// approver_user_id is snapshotted from the WorkflowDefinition tier active at
+// submission time, so a later threshold change never moves an in-flight
+// bill's approver (F-10 edge case).
+model ApprovalStep {
+  id                String             @id @default(uuid())
+  org_id            String
+  payable_type      PayableType
+  payable_id        String
+  tier              Int
+  approver_user_id  String
+  status            ApprovalStepStatus
+  remark            String?
+  acted_at          DateTime?
+  created_at        DateTime           @default(now())
+
+  approver User @relation("ApprovalStepApprover", fields: [approver_user_id], references: [id])
+
+  utility_bill_id String?
+  utilityBill     UtilityBill? @relation(fields: [utility_bill_id], references: [id])
+
+  @@index([org_id])
+  @@index([payable_type, payable_id])
+}
+
+enum ApprovalStepStatus {
+  pending
+  approved
+  rejected
+  returned
+}
+
 // --- Property & Lease Module ---------------------------------------------
 
 model Lease {
@@ -428,10 +526,21 @@ model Lease {
   landlord_id      String
   start_date       DateTime    @db.Date
   end_date         DateTime    @db.Date
+  // Day-of-month anchor for rent/CAM obligation periods (Step 06 engine),
+  // same role as UtilityAccount's billing start date -- may differ from
+  // start_date when rent is due on a fixed day each month.
+  rent_due_anchor_date DateTime @db.Date
   rent_amount      Decimal
   cam_amount       Decimal?
   security_deposit Decimal?
+  security_deposit_refunded Boolean @default(false)
   escalation_pct   Decimal?
+  // Date the escalation_pct increase takes effect. Set alongside
+  // escalation_pct at lease creation/renewal; leaseEscalationJob applies the
+  // increase to rent_amount exactly once on/after this date (escalation_applied_at
+  // is the idempotency guard -- see src/server/property/leaseJobs.ts).
+  escalation_effective_date DateTime? @db.Date
+  escalation_applied_at     DateTime?
   status           LeaseStatus
 
   office   Office   @relation(fields: [office_id], references: [id])
@@ -456,6 +565,11 @@ model Landlord {
   name         String
   pan          String?
   bank_details Json
+  // F-13: TDS is opt-in per landlord; tds_rate_pct overrides
+  // Organization.default_tds_rate_pct when set. A TDS-applicable landlord
+  // with neither configured blocks rent payment (see rentPayment.ts).
+  tds_applicable Boolean @default(false)
+  tds_rate_pct   Decimal?
 
   organization Organization @relation(fields: [org_id], references: [id])
 
@@ -476,9 +590,10 @@ model Vendor {
 
   organization Organization @relation(fields: [org_id], references: [id])
 
-  amcContracts    AMCContract[]
-  utilityAccounts UtilityAccount[]
-  workOrders      WorkOrder[]
+  amcContracts       AMCContract[]
+  utilityAccounts    UtilityAccount[]
+  workOrders         WorkOrder[]
+  performanceReviews VendorPerformanceReview[]
 
   @@index([org_id])
 }
@@ -520,6 +635,26 @@ enum AMCContractStatus {
   due_for_renewal
   expired
   closed
+}
+
+// F-14: "Vendor performance record captures SLA compliance rate, response
+// time, and quality rating" -- one row per review, so a vendor's history is
+// a trend, not a single overwritten score.
+model VendorPerformanceReview {
+  id                  String   @id @default(uuid())
+  org_id              String
+  vendor_id           String
+  sla_compliance_pct  Decimal
+  response_time_hours Decimal
+  quality_rating      Int
+  remark              String?
+  reviewed_by         String
+  created_at          DateTime @default(now())
+
+  vendor     Vendor @relation(fields: [vendor_id], references: [id])
+  reviewedBy User   @relation("VendorPerformanceReviewedBy", fields: [reviewed_by], references: [id])
+
+  @@index([org_id])
 }
 
 // --- Facility & Maintenance Module -----------------------------------------
@@ -637,6 +772,13 @@ model Payment {
   org_id         String
   payable_type   PayableType
   payable_id     String
+  // Rent/CAM payments only (utility_bill already carries its own period via
+  // UtilityBill.billing_period) -- the "2026-09" style key a rent/cam
+  // payment covers, so TDS/payment history can be filtered and deduped
+  // period-wise per F-13 (see src/server/property/rentPayment.ts).
+  period         String?
+  // Rent/CAM: the installment due date the payment covers (like UtilityBill.due_date).
+  due_date       DateTime?      @db.Date
   amount         Decimal
   tds_amount     Decimal?
   net_amount     Decimal
@@ -678,7 +820,13 @@ enum PaymentStatus {
 model AuditLog {
   id             String   @id @default(uuid())
   org_id         String
-  actor_user_id  String
+  // Exactly one of these two is set. actor_user_id is nullable (was
+  // required in Step 02/03) because Build Step 05 needs to audit Platform
+  // Operator actions (F-20) -- PlatformOperator is deliberately not a row
+  // in User (04-architecture.md), so it gets its own nullable FK rather than
+  // forcing a fake User row into existence just to satisfy the old NOT NULL.
+  actor_user_id  String?
+  actor_platform_operator_id String?
   entity_type    String
   entity_id      String
   action         String
@@ -686,7 +834,50 @@ model AuditLog {
   after_value    Json?
   created_at     DateTime @default(now())
 
-  actor User @relation("AuditLogActor", fields: [actor_user_id], references: [id])
+  actor User? @relation("AuditLogActor", fields: [actor_user_id], references: [id])
+  actorPlatformOperator PlatformOperator? @relation(fields: [actor_platform_operator_id], references: [id])
 
   @@index([org_id])
+}
+
+// --- Notification Module ----------------------------------------------
+
+// Not in 04-architecture.md's original data model -- added in Build Step 05
+// because F-19's acceptance rubric explicitly requires reminder jobs to be
+// "verified by ... checking NotificationLog", but 04-architecture.md's
+// compact data model never field-specifies the Notification Module's owned
+// entities (same gap category as Invite in Step 03 -- see schema.prisma's
+// top-of-file note).
+model NotificationLog {
+  id               String   @id @default(uuid())
+  org_id           String
+  notification_type String  // e.g. "trial_reminder_3d", "trial_reminder_1d", "trial_expired"
+  recipient_user_id String?
+  recipient_email  String
+  sent_at          DateTime @default(now())
+  metadata         Json?
+
+  @@index([org_id])
+}
+
+// Build Step 08: per-org, per-domain reminder-window config, per
+// 08-build-playbook.md's mandatory pattern ("renewal reminder windows are
+// config values, not hardcoded per-job constants"). One row per
+// org+rule_type; reminder_days is a JSON int array, e.g. [180, 90, 60, 30].
+// Falls back to DEFAULT_REMINDER_DAYS in leaseJobs.ts when no row exists, so
+// an org needs no setup step before reminders start working.
+model NotificationRule {
+  id            String               @id @default(uuid())
+  org_id        String
+  rule_type     NotificationRuleType
+  reminder_days Json
+
+  @@unique([org_id, rule_type])
+  @@index([org_id])
+}
+
+enum NotificationRuleType {
+  lease_renewal
+  amc_renewal
+  compliance_expiry
 }

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { HttpError } from "wasp/server";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { HttpError, prisma } from "wasp/server";
 import type { AuthUser } from "wasp/auth";
 import { assertRole, assertOfficeScope } from "../src/server/shared/authz";
 import { generateBase32Secret, generateTotp, verifyTotp, getOtpAuthUri } from "../src/server/auth/totp";
@@ -203,5 +203,48 @@ describe("assertOfficeScope", () => {
       mfa_verified_until: mfaVerifiedUntil(),
     });
     await expect(assertOfficeScope(user, "any-office", entities, "test")).resolves.toBeUndefined();
+  });
+});
+
+// Build Step 05, F-20: "A Platform Operator suspending an org's tenant_status
+// blocks every subsequent API call for that org's users immediately." This
+// check (authz.ts's assertOrgNotSuspended) reads Organization directly via
+// `prisma`, not a mockable `context.entities` -- so unlike the rest of this
+// file, it needs a real row in the real dev database. Still fast (local
+// Postgres), just not a pure unit test.
+describe("assertRole: org suspension (F-20)", () => {
+  const orgId = "test-authz-suspend-org";
+
+  beforeAll(async () => {
+    await prisma.organization.upsert({
+      where: { id: orgId },
+      update: { tenant_status: "active" },
+      create: {
+        id: orgId,
+        name: "authz.test.ts suspension fixture",
+        default_currency: "INR",
+        timezone: "Asia/Kolkata",
+        tenant_status: "active",
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.organization.delete({ where: { id: orgId } }).catch(() => {});
+  });
+
+  it("allows a role-matching request while the org is active", async () => {
+    const { entities } = makeEntities();
+    const user = makeUser({ org_id: orgId });
+    await expect(assertRole(user, ["office_admin"], entities, "test")).resolves.toBe(user);
+  });
+
+  it("blocks every request the instant tenant_status flips to suspended", async () => {
+    await prisma.organization.update({ where: { id: orgId }, data: { tenant_status: "suspended" } });
+    const { entities } = makeEntities();
+    const user = makeUser({ org_id: orgId });
+    await expect(assertRole(user, ["office_admin"], entities, "test")).rejects.toMatchObject({
+      statusCode: 403,
+    });
   });
 });

@@ -72,10 +72,31 @@ export const userSignupFields = defineUserSignupFields({
         timezone: "Asia/Kolkata",
       },
     });
+    // Build Step 05, F-19: every new org gets a 14-day trial with zero
+    // payment method required -- created here, not in a later "activate"
+    // step, so there is never a moment where a signed-up org has no
+    // Subscription row at all.
+    const trialDays = 14;
+    await prisma.subscription.create({
+      data: {
+        org_id: org.id,
+        plan: "starter",
+        status: "trialing",
+        trial_ends_at: new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000),
+      },
+    });
     return { connect: { id: org.id } };
   },
   role: async (data) => {
     const invite = await resolveInvite(data);
     return invite ? invite.role : "platform_admin";
+  },
+  // Carries the office the platform_admin picked in inviteUser (src/server/
+  // admin/invites.ts) onto the created User -- without this, an invited
+  // non-platform_admin would sign up with no office_scope and fail every
+  // assertOfficeScope check.
+  office_scope: async (data) => {
+    const invite = await resolveInvite(data);
+    return invite?.office_scope ?? undefined;
   },
 });

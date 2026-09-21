@@ -57,6 +57,13 @@ function Wizard({ officeId }: { officeId: string }) {
   const categoryParam = searchParams.get("category") as Step | null;
   const currentStep: Step = categoryParam && STEPS.includes(categoryParam) ? categoryParam : data?.resumeCategory as Step ?? "utility";
 
+  // Ensure current step is always in URL so completion doesn't auto-jump
+  useEffect(() => {
+    if (!categoryParam && !isLoading && data?.resumeCategory) {
+      setSearchParams({ officeId, category: currentStep });
+    }
+  }, [officeId, categoryParam, isLoading, data?.resumeCategory, currentStep, setSearchParams]);
+
   function goToStep(step: Step) {
     setSearchParams({ officeId, category: step });
   }

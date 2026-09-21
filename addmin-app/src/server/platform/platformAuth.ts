@@ -1,8 +1,24 @@
 import crypto from "node:crypto";
+import cors from "cors";
 import type { Request, Response } from "express";
-import { prisma } from "wasp/server";
+import { prisma, config } from "wasp/server";
 import type { PlatformLogin, PlatformLogout, PlatformMe } from "wasp/server/api";
+import type { MiddlewareConfigFn } from "wasp/server/middleware";
 import { verifyMfaCode } from "../auth/mfa";
+
+// Every /platform/* api route uses this. Wasp's default global CORS
+// middleware (cors({ origin: allowedCORSOrigins })) allows any origin in dev
+// but never sets `credentials: true` -- the browser then blocks any
+// fetch(..., { credentials: "include" }) response at the preflight check,
+// since Access-Control-Allow-Credentials is required (and Allow-Origin can't
+// be "*") whenever a request carries credentials. Only /platform/* needs
+// this: it's the one part of the app using a cookie session across the
+// client (3002) / server (3011) origin split instead of Wasp's own
+// Bearer-token auth, which isn't subject to CORS preflight the same way.
+export const platformCorsMiddlewareConfigFn: MiddlewareConfigFn = (mc) => {
+  mc.set("cors", cors({ origin: config.frontendUrl, credentials: true }));
+  return mc;
+};
 
 // PlatformOperator never shares a table, a session cookie, or an authz code
 // path with the customer User -- per 04-architecture.md's F-20 and Build

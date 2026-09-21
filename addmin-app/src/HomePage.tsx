@@ -1,12 +1,13 @@
 import { Navigate } from "react-router";
 import { useAuth } from "wasp/client/auth";
-import { useQuery, getMfaStatus } from "wasp/client/operations";
+import { useQuery, getMfaStatus, getSubscription } from "wasp/client/operations";
 
 export function HomePage() {
   const { data: user } = useAuth();
   const { data: mfaStatus, isLoading: mfaStatusLoading } = useQuery(getMfaStatus);
+  const { data: subscription, isLoading: subscriptionLoading } = useQuery(getSubscription);
 
-  if (mfaStatusLoading) return null;
+  if (mfaStatusLoading || subscriptionLoading) return null;
 
   // Every operation on the server is already blocked until these pass
   // (src/server/shared/authz.ts) -- these redirects are just so the user
@@ -17,13 +18,12 @@ export function HomePage() {
   if (mfaStatus?.mfaEnabled && !mfaStatus.mfaVerifiedThisWindow) {
     return <Navigate to="/mfa-verify" replace />;
   }
+  // F-19: an org whose trial expired with no plan chosen is gated to
+  // "choose a plan" on next access -- trialing/active/past_due all still
+  // get in (past_due keeps access; Stripe's own dunning handles that case).
+  if (subscription?.status === "expired" || subscription?.status === "canceled") {
+    return <Navigate to="/app/subscribe" replace />;
+  }
 
-  return (
-    <div className="flex flex-1 items-center justify-center p-12">
-      <p className="text-neutral-600">
-        AddMin — signed in{user ? ` as ${user.identities.email?.id}` : ""}.
-        Build Step 03 (auth/RBAC) complete. Feature pages land in later build steps.
-      </p>
-    </div>
-  );
+  return <Navigate to="/app/onboarding" replace />;
 }

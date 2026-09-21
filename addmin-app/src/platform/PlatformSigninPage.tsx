@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { platformApiUrl } from "./apiBase";
 
 // Deliberately not built on Wasp's <LoginForm>/useAuth -- PlatformOperator
 // isn't a Wasp auth user at all (see src/server/platform/platformAuth.ts).
@@ -9,14 +10,13 @@ export function PlatformSigninPage() {
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [signedInAs, setSignedInAs] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setIsSubmitting(true);
     try {
-      const res = await fetch("/platform/login", {
+      const res = await fetch(platformApiUrl("/platform/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -26,28 +26,11 @@ export function PlatformSigninPage() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.message ?? "Login failed.");
       }
-      const body = await res.json();
-      // /platform/organizations (the actual console) doesn't exist until a
-      // later build step -- confirming the session here instead of a 404 redirect.
-      setSignedInAs(body.email);
+      window.location.href = "/platform/organizations";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed.");
-    } finally {
       setIsSubmitting(false);
     }
-  }
-
-  if (signedInAs) {
-    return (
-      <div className="flex justify-center">
-        <div className="card mt-32 h-fit w-full max-w-md px-8 py-10">
-          <p className="text-neutral-900">
-            Signed in as <strong>{signedInAs}</strong>. The Platform Ops
-            Console (org list, etc.) is built in a later build step.
-          </p>
-        </div>
-      </div>
-    );
   }
 
   return (

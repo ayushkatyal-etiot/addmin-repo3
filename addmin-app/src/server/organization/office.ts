@@ -6,9 +6,10 @@ import type {
   ListOffices,
   GetOffice,
   ListOrgUsers,
+  UpdateUserOffice,
 } from "wasp/server/operations";
 import type { PrismaClient } from "@prisma/client";
-import { assertRole, type Role } from "../shared/authz";
+import { assertRole, ALL_ROLES, type Role } from "../shared/authz";
 import { CHECKLIST_TEMPLATE } from "../onboarding/checklistTemplates";
 
 // Build Step 04 (planmysaas-blueprint/08-build-playbook.md): Organization &
@@ -234,6 +235,17 @@ function parseCsv(csv: string): Record<string, string>[] {
   });
 }
 
+// Roles that pick an office on /app/bills, /app/payments, etc. — not only
+// office admins (Build Step 07: Checker / Payment Authorizer need read access
+// to offices in their office_scope).
+const OFFICE_LIST_ROLES: Role[] = [
+  ...OFFICE_ADMIN_ROLES,
+  "office_head",
+  "vendor_manager",
+  "checker",
+  "payment_authorizer",
+];
+
 export const listOffices: ListOffices<
   void,
   Array<{
@@ -246,16 +258,20 @@ export const listOffices: ListOffices<
     completion_pct: number;
   }>
 > = async (_args, context) => {
-  const user = await assertRole(
-    context.user,
-    [...OFFICE_ADMIN_ROLES, "office_head"],
-    context.entities,
-    "listOffices",
-  );
+  const user = await assertRole(context.user, OFFICE_LIST_ROLES, context.entities, "listOffices");
   if (!user.org_id) return [];
 
+  const orgWideOfficeAccess = user.role === "platform_admin" || user.role === "office_admin";
+  const scopedOfficeIds = orgWideOfficeAccess
+    ? null
+    : Object.keys((user.office_scope ?? {}) as Record<string, string[]>);
+  if (!orgWideOfficeAccess && scopedOfficeIds!.length === 0) return [];
+
   const offices = await context.entities.Office.findMany({
-    where: { org_id: user.org_id },
+    where: {
+      org_id: user.org_id,
+      ...(scopedOfficeIds ? { id: { in: scopedOfficeIds } } : {}),
+    },
     include: { setupProfile: true },
     orderBy: { created_at: "asc" },
   });
@@ -307,17 +323,69 @@ export const getOffice: GetOffice<
 // Used by the onboarding wizard's "assign owner" pickers (F-04's Roles step)
 // -- listing every user in the caller's org, not office-scoped, since a role
 // owner can be assigned before their own office_scope is configured.
-export const listOrgUsers: ListOrgUsers<void, Array<{ id: string; email: string | null; role: string | null }>> = async (
-  _args,
-  context,
-) => {
+export const listOrgUsers: ListOrgUsers<
+  void,
+  Array<{ id: string; email: string | null; role: string | null; office_scope: Record<string, string[]> | null }>
+> = async (_args, context) => {
   const user = await assertRole(context.user, OFFICE_ADMIN_ROLES, context.entities, "listOrgUsers");
   if (!user.org_id) return [];
 
   const users = await context.entities.User.findMany({
     where: { org_id: user.org_id },
-    select: { id: true, email: true, role: true },
+    select: { id: true, email: true, role: true, office_scope: true },
     orderBy: { email: "asc" },
   });
-  return users;
+  return users as unknown as Array<{
+    id: string;
+    email: string | null;
+    role: string | null;
+    office_scope: Record<string, string[]> | null;
+  }>;
+};
+
+// platform_admin only -- lets an admin (re)assign which office(s) a teammate
+// is scoped to after they've already signed up, since inviteUser's
+// officeRoles only sets the *initial* office_scope at invite time. Replaces
+// the full office_scope map with the given set (not a merge) -- unchecking
+// an office in the UI must actually revoke it. Each office can carry its
+// own role (e.g. office_admin at one site, checker at another).
+export const updateUserOffice: UpdateUserOffice<{ userId: string; officeRoles: Record<string, string> }, void> = async (
+  { userId, officeRoles },
+  context,
+) => {
+  const admin = await assertRole(context.user, ["platform_admin"], context.entities, "updateUserOffice");
+  if (!admin.org_id) {
+    throw new HttpError(400, "You must belong to an organization to do this.");
+  }
+
+  const targetUser = await context.entities.User.findFirst({ where: { id: userId, org_id: admin.org_id } });
+  if (!targetUser) {
+    throw new HttpError(404, "User not found.");
+  }
+  if (targetUser.role === "platform_admin") {
+    throw new HttpError(400, "Platform admins are not office-scoped.");
+  }
+
+  const officeEntries = Object.entries(officeRoles);
+  if (officeEntries.length === 0) {
+    throw new HttpError(400, "Choose at least one office for this user.");
+  }
+  for (const [, role] of officeEntries) {
+    if (!ALL_ROLES.includes(role as never)) {
+      throw new HttpError(400, `"${role}" is not a valid role.`);
+    }
+  }
+
+  const officeIds = officeEntries.map(([id]) => id);
+  const offices = await context.entities.Office.findMany({
+    where: { id: { in: officeIds }, org_id: admin.org_id },
+  });
+  if (offices.length !== officeIds.length) {
+    throw new HttpError(400, "One or more selected offices do not belong to your organization.");
+  }
+
+  await context.entities.User.update({
+    where: { id: userId },
+    data: { office_scope: Object.fromEntries(officeEntries.map(([id, role]) => [id, [role]])) },
+  });
 };

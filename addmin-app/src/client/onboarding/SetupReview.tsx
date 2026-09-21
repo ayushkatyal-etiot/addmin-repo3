@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router";
 import { useQuery, getOfficeChecklist, activateOffice } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
 import { CHECKLIST_CATEGORY_ORDER, CHECKLIST_CATEGORY_TITLES } from "../../server/onboarding/checklistTemplates";
@@ -16,6 +17,7 @@ export function SetupReview({
   onActivated?: () => void;
   onJumpToCategory?: (category: string) => void;
 }) {
+  const navigate = useNavigate();
   const { data, isLoading, refetch } = useQuery(getOfficeChecklist, { officeId });
   const [activating, setActivating] = useState(false);
   const [activationError, setActivationError] = useState<string | null>(null);
@@ -32,6 +34,7 @@ export function SetupReview({
       } else {
         await refetch();
         onActivated?.();
+        navigate("/app/subscribe");
       }
     } catch (err) {
       setActivationError(err instanceof Error ? err.message : "Could not activate office.");
