@@ -1,0 +1,6 @@
+office_code,utility_type,provider_name,meter_account_no,billing_cycle,vendor_id,start_date
+DEMO-HQ,electricity,Regional Grid Corp,BULK-ELEC-HQ-001,monthly,,2025-06-01
+DEMO-HQ,water,Municipal Water Board,BULK-WATER-HQ-002,bimonthly,,2025-06-01
+DEMO-HQ,internet,FastFiber Networks,BULK-INET-HQ-003,monthly,,2025-08-15
+DEMO-BLR,electricity,BESCOM Bengaluru,BULK-ELEC-BLR-001,monthly,,2025-07-01
+DEMO-BLR,gas,Indane LPG Commercial,BULK-GAS-BLR-002,quarterly,,2025-01-01
