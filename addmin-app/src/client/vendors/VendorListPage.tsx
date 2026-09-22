@@ -63,7 +63,7 @@ export function VendorListPage() {
   if (authLoading || contextLoading || isLoading) return <PageLoading />;
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-12">
+    <div className="p-6">
       <div className="mb-6 flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold text-neutral-900">Vendors</h1>
         {canManageVendors && (

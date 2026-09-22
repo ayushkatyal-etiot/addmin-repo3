@@ -35,7 +35,7 @@ export function PaymentsPage() {
 
   if (officesError) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Payments</h1>
         <ErrorBanner error={officesError} />
       </div>
@@ -44,14 +44,14 @@ export function PaymentsPage() {
 
   if (!hasOffices) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <NoOfficesInScope />
       </div>
     );
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-12">
+    <div className="p-6">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Payments</h1>
       {user?.role === "payment_authorizer" && (
         <p className="mb-4 text-sm text-neutral-600">

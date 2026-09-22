@@ -54,7 +54,7 @@ export function UtilityAccountDetailPage() {
   if (isLoading) return null;
   if (!account) {
     return (
-      <div className="mx-auto w-full max-w-3xl p-12">
+      <div className="p-6">
         <ErrorBanner error={loadError} />
         {!loadError && "Not found."}
       </div>
@@ -62,7 +62,7 @@ export function UtilityAccountDetailPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl p-12">
+    <div className="p-6">
       <div className="mb-6 flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-neutral-900">{account.provider_name}</h1>

@@ -68,7 +68,7 @@ export function MaintenanceListPage() {
 
   if (officesError) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Maintenance</h1>
         <ErrorBanner error={officesError} />
       </div>
@@ -77,7 +77,7 @@ export function MaintenanceListPage() {
 
   if (!hasOffices) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <div className="card p-8 text-center text-neutral-500">
           No offices in your scope.{" "}
           <Link to="/app/offices/new" className="font-semibold text-primary-600 underline">
@@ -90,7 +90,7 @@ export function MaintenanceListPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-12">
+    <div className="p-6">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Maintenance</h1>
 
       <form onSubmit={onSubmit} className="card mb-8 flex flex-col gap-4 p-8">

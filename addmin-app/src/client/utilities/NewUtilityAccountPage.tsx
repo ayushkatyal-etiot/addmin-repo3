@@ -62,18 +62,18 @@ export function NewUtilityAccountPage() {
 
   if (!hasOffices) {
     return (
-      <div className="mx-auto w-full max-w-2xl p-12">
+      <div className="p-6">
         <NoOfficesInScope />
       </div>
     );
   }
 
   return (
-    <div className="mx-auto w-full max-w-2xl p-12">
+    <div className="p-6">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Add utility connection</h1>
       <p className="mb-4 text-sm text-neutral-500">Connection will be created for the office selected in the top bar.</p>
 
-      <form onSubmit={onSubmit} className="card flex flex-col gap-6 p-8">
+      <form onSubmit={onSubmit} className="card flex max-w-2xl flex-col gap-6 p-8">
         <div>
           <label className="label">Utility type</label>
           <select className="select-field" value={utilityType} onChange={(e) => setUtilityType(e.target.value)}>

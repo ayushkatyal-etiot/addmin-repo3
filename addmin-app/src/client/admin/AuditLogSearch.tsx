@@ -36,7 +36,7 @@ export function AuditLogSearch() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl p-12">
+    <div className="p-6">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Audit logs</h1>
       <ErrorBanner error={error} />
 

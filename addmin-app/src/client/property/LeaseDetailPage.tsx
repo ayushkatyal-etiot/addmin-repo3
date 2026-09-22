@@ -57,7 +57,7 @@ export function LeaseDetailPage() {
   if (isLoading) return null;
   if (!lease) {
     return (
-      <div className="mx-auto w-full max-w-3xl p-12">
+      <div className="p-6">
         <ErrorBanner error={loadError} />
         {!loadError && "Not found."}
       </div>
@@ -111,7 +111,7 @@ export function LeaseDetailPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl p-12">
+    <div className="p-6">
       <button className="mb-4 text-sm text-neutral-500 hover:underline" onClick={() => navigate(-1)}>
         ← Back
       </button>

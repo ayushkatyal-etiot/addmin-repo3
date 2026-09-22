@@ -68,7 +68,7 @@ export function ComplianceListPage() {
 
   if (officesError) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Compliance</h1>
         <ErrorBanner error={officesError} />
       </div>
@@ -77,14 +77,14 @@ export function ComplianceListPage() {
 
   if (!hasOffices) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <NoOfficesInScope />
       </div>
     );
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-12">
+    <div className="p-6">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Compliance</h1>
 
       <div className="card mb-6 flex items-end gap-3 p-4">

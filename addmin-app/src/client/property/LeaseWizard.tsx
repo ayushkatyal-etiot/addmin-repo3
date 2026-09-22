@@ -78,7 +78,7 @@ export function LeaseWizard() {
 
   if (!hasOffices) {
     return (
-      <div className="mx-auto w-full max-w-2xl p-12">
+      <div className="p-6">
         <NoOfficesInScope />
       </div>
     );
@@ -92,11 +92,11 @@ export function LeaseWizard() {
     (landlordMode === "existing" ? effectiveLandlordId : landlordName.trim());
 
   return (
-    <div className="mx-auto w-full max-w-2xl p-12">
+    <div className="p-6">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Add lease</h1>
       <p className="mb-4 text-sm text-neutral-500">Lease will be created for the office selected in the top bar.</p>
 
-      <form onSubmit={onSubmit} className="card flex flex-col gap-6 p-8">
+      <form onSubmit={onSubmit} className="card flex max-w-2xl flex-col gap-6 p-8">
         <div>
           <label className="label">Landlord</label>
           <div className="mb-2 flex gap-4 text-sm">

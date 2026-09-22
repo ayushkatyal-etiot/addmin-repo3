@@ -72,7 +72,7 @@ function getButtonClasses({
   className: ClassNameValue;
 }): string {
   return twJoin(
-    "inline-flex items-center justify-center gap-2 rounded-md border font-semibold outline-hidden transition-colors",
+    "inline-flex items-center justify-center gap-2 rounded-md border font-semibold whitespace-nowrap outline-hidden transition-colors",
     "focus-visible:ring-4 focus-visible:ring-primary-100",
     "disabled:cursor-not-allowed disabled:border-neutral-100 disabled:bg-neutral-50 disabled:text-neutral-400",
     variantStyles[variant],

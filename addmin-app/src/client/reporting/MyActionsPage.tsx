@@ -31,7 +31,7 @@ export function MyActionsPage() {
   if (isLoading) return <PageLoading />;
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-12">
+    <div className="p-6">
       <h1 className="mb-1 text-2xl font-semibold text-neutral-900">My actions</h1>
       <p className="mb-6 text-sm text-neutral-600">Everything across every module waiting on you, in one place.</p>
 

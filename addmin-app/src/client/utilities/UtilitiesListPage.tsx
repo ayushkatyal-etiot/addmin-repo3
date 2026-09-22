@@ -30,7 +30,7 @@ export function UtilitiesListPage() {
 
   if (officesError) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Utility connections</h1>
         <ErrorBanner error={officesError} />
       </div>
@@ -39,7 +39,7 @@ export function UtilitiesListPage() {
 
   if (!hasOffices) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <div className="card p-8 text-center text-neutral-500">
           No offices in your scope.{" "}
           <Link to="/app/offices/new" className="font-semibold text-primary-600 underline">
@@ -52,7 +52,7 @@ export function UtilitiesListPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-12">
+    <div className="p-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-neutral-900">Utility connections</h1>
         <div className="flex items-center gap-5">

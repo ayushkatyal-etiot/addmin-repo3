@@ -21,7 +21,7 @@ export function OfficeListPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl p-10">
+    <div className="p-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-[32px] font-bold tracking-tight text-neutral-900">Offices</h1>
         <div className="flex items-center gap-5">

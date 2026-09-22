@@ -52,7 +52,7 @@ export function ExecutiveDashboardPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl p-12">
+    <div className="p-6">
       <h1 className="mb-1 text-2xl font-semibold text-neutral-900">Executive dashboard</h1>
       <p className="mb-6 text-sm text-neutral-600">Cross-office spend, overdue items, renewals, and compliance gaps.</p>
 

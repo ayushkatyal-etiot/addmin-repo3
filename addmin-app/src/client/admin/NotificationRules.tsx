@@ -51,7 +51,7 @@ export function NotificationRules() {
   if (isLoading) return null;
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-12">
+    <div className="p-6">
       <h1 className="mb-1 text-2xl font-semibold text-neutral-900">Notifications</h1>
       <p className="mb-6 text-sm text-neutral-600">
         Configure reminder windows and review emails recorded in the delivery log (seeded and job-generated).

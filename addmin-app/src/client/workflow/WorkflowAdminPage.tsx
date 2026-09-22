@@ -63,7 +63,7 @@ export function WorkflowAdminPage() {
   const effectiveApprover = approverUserId || users?.[0]?.id || "";
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-12">
+    <div className="p-6">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Approval workflow</h1>
       <ErrorBanner error={definitionsError} />
 

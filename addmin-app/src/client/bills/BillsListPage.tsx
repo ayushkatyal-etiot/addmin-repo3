@@ -29,7 +29,7 @@ export function BillsListPage() {
 
   if (officesError) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Utility bills</h1>
         <ErrorBanner error={officesError} />
       </div>
@@ -38,14 +38,14 @@ export function BillsListPage() {
 
   if (!hasOffices) {
     return (
-      <div className="mx-auto w-full max-w-4xl p-12">
+      <div className="p-6">
         <NoOfficesInScope />
       </div>
     );
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl p-12">
+    <div className="p-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-neutral-900">Utility bills</h1>
         <Button onClick={() => navigate("/app/bills/new")}>Enter bill</Button>

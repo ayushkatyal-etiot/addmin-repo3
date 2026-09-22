@@ -57,7 +57,7 @@ export function SubscribePage() {
     : null;
 
   return (
-    <div className="mx-auto w-full max-w-2xl p-12">
+    <div className="p-6">
       <h1 className="mb-2 text-2xl font-semibold text-neutral-900">Subscription</h1>
       {success && (
         <div className="card mb-4 border-primary-200 bg-primary-50 p-4 text-sm text-primary-800">
