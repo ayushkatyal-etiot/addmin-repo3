@@ -1,29 +1,28 @@
-import { useSearchParams, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import { useAuth } from "wasp/client/auth";
-import { useQuery, listOffices, listLeases } from "wasp/client/operations";
+import { useQuery, listLeases } from "wasp/client/operations";
 import { Link } from "wasp/client/router";
 import { Button } from "../../shared/components/Button";
+import { Badge, type BadgeTone } from "../../shared/components/Badge";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
 import { PageLoading } from "../../shared/components/PageLoading";
+import { useSelectedOffice } from "../../shared/SelectedOfficeContext";
+import { sentenceCase } from "../../shared/text";
 
-const STATUS_CLASS: Record<string, string> = {
-  draft: "bg-neutral-100 text-neutral-600",
-  active: "bg-primary-100 text-primary-800",
-  expiring: "bg-amber-100 text-amber-800",
-  renewed: "bg-blue-100 text-blue-800",
-  terminated: "bg-red-100 text-red-800",
+const STATUS_TONE: Record<string, BadgeTone> = {
+  draft: "neutral",
+  active: "success",
+  expiring: "warning",
+  renewed: "info",
+  terminated: "danger",
 };
 
-// F-12: leases list, same office-switcher-on-page pattern as
-// UtilitiesListPage.tsx (/app/property/leases isn't office-nested in the URL).
+// F-12: leases list — office scope from the top bar.
 export function LeaseListPage() {
   const { data: user } = useAuth();
   const canAddLease = user?.role === "platform_admin" || user?.role === "office_admin";
-  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { data: offices, isLoading: officesLoading, error: officesError } = useQuery(listOffices);
-
-  const officeId = searchParams.get("officeId") ?? offices?.[0]?.id ?? "";
+  const { officeId, isLoading: officesLoading, error: officesError, hasOffices } = useSelectedOffice();
   const { data: leases, isLoading: leasesLoading, error: leasesError } = useQuery(
     listLeases,
     officeId ? { officeId } : undefined,
@@ -45,7 +44,7 @@ export function LeaseListPage() {
     );
   }
 
-  if (!offices || offices.length === 0) {
+  if (!hasOffices) {
     return (
       <div className="mx-auto w-full max-w-4xl p-12">
         <div className="card p-8 text-center text-neutral-500">
@@ -64,26 +63,12 @@ export function LeaseListPage() {
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-neutral-900">Leases</h1>
         {canAddLease && (
-          <Button onClick={() => navigate(`/app/property/leases/new?officeId=${officeId}`)}>Add lease</Button>
+          <Button onClick={() => navigate("/app/property/leases/new")}>Add lease</Button>
         )}
       </div>
       {user?.role === "payment_authorizer" && (
         <p className="mb-4 text-sm text-neutral-500">Open a lease to record rent or CAM payments.</p>
       )}
-
-      <div className="mb-4">
-        <select
-          className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
-          value={officeId}
-          onChange={(e) => setSearchParams({ officeId: e.target.value })}
-        >
-          {offices.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
-            </option>
-          ))}
-        </select>
-      </div>
 
       <ErrorBanner error={leasesError} />
 
@@ -94,17 +79,16 @@ export function LeaseListPage() {
       )}
 
       {!leasesLoading && leases && leases.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-neutral-500">
+          <table className="table-shell">
+            <thead>
               <tr>
-                <th className="px-4 py-3">Landlord</th>
-                <th className="px-4 py-3">Rent</th>
-                <th className="px-4 py-3">CAM</th>
-                <th className="px-4 py-3">Start</th>
-                <th className="px-4 py-3">End</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
+                <th className="table-head-cell">Landlord</th>
+                <th className="table-head-cell">Rent</th>
+                <th className="table-head-cell">CAM</th>
+                <th className="table-head-cell">Start</th>
+                <th className="table-head-cell">End</th>
+                <th className="table-head-cell">Status</th>
+                <th className="table-head-cell" />
               </tr>
             </thead>
             <tbody>
@@ -114,22 +98,19 @@ export function LeaseListPage() {
                   className="cursor-pointer border-t border-neutral-100 hover:bg-neutral-50"
                   onClick={() => navigate(`/app/property/leases/${l.id}`)}
                 >
-                  <td className="px-4 py-3 font-medium text-neutral-900">{l.landlord_name}</td>
-                  <td className="px-4 py-3 text-neutral-600">{l.rent_amount}</td>
-                  <td className="px-4 py-3 text-neutral-600">{l.cam_amount ?? "—"}</td>
-                  <td className="px-4 py-3 text-neutral-600">{new Date(l.start_date).toLocaleDateString()}</td>
-                  <td className="px-4 py-3 text-neutral-600">{new Date(l.end_date).toLocaleDateString()}</td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[l.status]}`}>
-                      {l.status}
-                    </span>
+                  <td className="table-cell font-medium text-neutral-900">{l.landlord_name}</td>
+                  <td className="table-cell text-neutral-600">{l.rent_amount}</td>
+                  <td className="table-cell text-neutral-600">{l.cam_amount ?? "—"}</td>
+                  <td className="table-cell text-neutral-600">{new Date(l.start_date).toLocaleDateString()}</td>
+                  <td className="table-cell text-neutral-600">{new Date(l.end_date).toLocaleDateString()}</td>
+                  <td className="table-cell">
+                    <Badge tone={STATUS_TONE[l.status] ?? "neutral"}>{sentenceCase(l.status)}</Badge>
                   </td>
-                  <td className="px-4 py-3 text-right text-primary-600 underline">View</td>
+                  <td className="table-cell text-right text-primary-600 underline">View</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
       )}
     </div>
   );

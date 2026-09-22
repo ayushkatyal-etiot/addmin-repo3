@@ -12,5 +12,12 @@ export default defineConfig({
   },
   server: {
     open: true,
+    // Dev-only: same-origin uploads (avoids CORS on multipart + Authorization preflight).
+    proxy: {
+      "/api/upload": {
+        target: process.env.REACT_APP_API_URL ?? "http://localhost:3011",
+        changeOrigin: true,
+      },
+    },
   },
 })

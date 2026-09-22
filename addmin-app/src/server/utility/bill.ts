@@ -14,7 +14,7 @@ import { linkUtilityBillToObligation, normalizeBillingPeriodKey } from "../oblig
 // -- entry (this file), approval (../workflow/approval.ts), payment
 // (../payment/payment.ts). Reuses OFFICE_ADMIN_ROLES-style Maker grouping
 // from Step 04/06 rather than inventing a separate "maker" role.
-const MAKER_ROLES: Role[] = ["platform_admin", "office_admin"];
+export const MAKER_ROLES: Role[] = ["platform_admin", "office_admin"];
 
 type CreateUtilityBillInput = {
   utility_account_id: string;

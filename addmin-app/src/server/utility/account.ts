@@ -1,6 +1,7 @@
 import { HttpError } from "wasp/server";
 import type {
   CreateUtilityAccount,
+  BulkImportUtilityAccounts,
   ListUtilityAccounts,
   GetUtilityAccount,
   DeactivateUtilityAccount,
@@ -8,6 +9,7 @@ import type {
 import { assertRole, assertOfficeScope, type Role } from "../shared/authz";
 import { createObligationSchedule, deactivateObligationSchedule } from "../obligation/schedule";
 import { reconcileUtilityObligationInstances } from "../obligation/instanceLifecycle";
+import { parseCsv } from "../shared/csv";
 
 // Build Step 06 (planmysaas-blueprint/08-build-playbook.md): Utility Module.
 // createUtilityAccount also creates the RecurringObligationSchedule in the
@@ -15,7 +17,7 @@ import { reconcileUtilityObligationInstances } from "../obligation/instanceLifec
 // RecurringObligationSchedule" is an invariant this module owns, not
 // something a caller has to remember to do as a second step.
 
-const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
+export const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
 
 // Not exposed as separate form fields in this step's UI -- a utility bill's
 // due timing is "by end of billing period" for every org today. Revisit if a
@@ -111,6 +113,60 @@ export const createUtilityAccount: CreateUtilityAccount<
   });
 
   return { id: account.id };
+};
+
+type BulkImportRowResult = { row: number; success: boolean; accountId?: string; error?: string };
+
+// CSV header: office_code,utility_type,provider_name,meter_account_no,billing_cycle,vendor_id,start_date
+// (vendor_id/start_date optional). Reuses createUtilityAccount per row so
+// the RecurringObligationSchedule invariant (F-07) is never bypassed by a
+// bulk-imported row.
+export const bulkImportUtilityAccounts: BulkImportUtilityAccounts<
+  { csv: string },
+  { results: BulkImportRowResult[] }
+> = async ({ csv }, context) => {
+  const user = await assertRole(context.user, OFFICE_ADMIN_ROLES, context.entities, "bulkImportUtilityAccounts");
+  if (!user.org_id) throw new HttpError(400, "You must belong to an organization first.");
+
+  const rows = parseCsv(csv);
+  if (rows.length === 0) {
+    throw new HttpError(400, "CSV has no data rows.");
+  }
+
+  const results: BulkImportRowResult[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rowNumber = i + 2; // header is row 1
+    try {
+      if (!row.office_code?.trim()) throw new HttpError(400, "office_code is required.");
+      const office = await context.entities.Office.findUnique({
+        where: { org_id_code: { org_id: user.org_id, code: row.office_code.trim().toUpperCase() } },
+      });
+      if (!office) throw new HttpError(400, `No office with code "${row.office_code}".`);
+
+      const account = await createUtilityAccount(
+        {
+          office_id: office.id,
+          utility_type: row.utility_type ?? "",
+          provider_name: row.provider_name ?? "",
+          meter_account_no: row.meter_account_no ?? "",
+          billing_cycle: (row.billing_cycle ?? "") as "monthly" | "bimonthly" | "quarterly",
+          vendor_id: row.vendor_id?.trim() || undefined,
+          start_date: row.start_date?.trim() || undefined,
+        },
+        context,
+      );
+      results.push({ row: rowNumber, success: true, accountId: account.id });
+    } catch (err) {
+      results.push({
+        row: rowNumber,
+        success: false,
+        error: err instanceof HttpError ? err.message : "Unexpected error.",
+      });
+    }
+  }
+
+  return { results };
 };
 
 export const listUtilityAccounts: ListUtilityAccounts<

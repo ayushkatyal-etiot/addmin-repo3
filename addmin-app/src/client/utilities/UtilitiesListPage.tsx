@@ -1,30 +1,30 @@
-import { useSearchParams, useNavigate } from "react-router";
-import { useQuery, listOffices, listUtilityAccounts } from "wasp/client/operations";
+import { useState } from "react";
+import { useNavigate } from "react-router";
+import { useQuery, listUtilityAccounts, bulkImportUtilityAccounts } from "wasp/client/operations";
 import { Link } from "wasp/client/router";
 import { Button } from "../../shared/components/Button";
+import { Badge, type BadgeTone } from "../../shared/components/Badge";
+import { BulkImportPanel } from "../../shared/components/BulkImportPanel";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
 import { PageLoading } from "../../shared/components/PageLoading";
+import { useSelectedOffice } from "../../shared/SelectedOfficeContext";
+import { sentenceCase } from "../../shared/text";
 
-const STATUS_CLASS: Record<string, string> = {
-  active: "bg-primary-100 text-primary-800",
-  inactive: "bg-neutral-100 text-neutral-600",
+const STATUS_TONE: Record<string, BadgeTone> = {
+  active: "success",
+  inactive: "neutral",
 };
 
-// F-06 (planmysaas-blueprint/05-features.md): utility connections list. Not
-// office-nested in the URL (06-frontend.md has this as /app/utilities, not
-// /app/offices/:id/utilities), so an office switcher lives on the page
-// itself instead of coming from the route.
+// F-06: utility connections list — office scope comes from the top bar selector.
 export function UtilitiesListPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { data: offices, isLoading: officesLoading, error: officesError } = useQuery(listOffices);
-
-  const officeId = searchParams.get("officeId") ?? offices?.[0]?.id ?? "";
-  const { data: accounts, isLoading: accountsLoading, error: accountsError } = useQuery(
+  const { officeId, isLoading: officesLoading, error: officesError, hasOffices } = useSelectedOffice();
+  const { data: accounts, isLoading: accountsLoading, error: accountsError, refetch } = useQuery(
     listUtilityAccounts,
     officeId ? { officeId } : undefined,
     { enabled: !!officeId },
   );
+  const [showImport, setShowImport] = useState(false);
 
   if (officesLoading) return <PageLoading />;
 
@@ -37,7 +37,7 @@ export function UtilitiesListPage() {
     );
   }
 
-  if (!offices || offices.length === 0) {
+  if (!hasOffices) {
     return (
       <div className="mx-auto w-full max-w-4xl p-12">
         <div className="card p-8 text-center text-neutral-500">
@@ -55,22 +55,29 @@ export function UtilitiesListPage() {
     <div className="mx-auto w-full max-w-4xl p-12">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-neutral-900">Utility connections</h1>
-        <Button onClick={() => navigate(`/app/utilities/new?officeId=${officeId}`)}>Add connection</Button>
+        <div className="flex items-center gap-5">
+          <button
+            type="button"
+            onClick={() => setShowImport((v) => !v)}
+            className="text-sm font-semibold text-primary-600 underline"
+          >
+            Bulk import (CSV)
+          </button>
+          <Button onClick={() => navigate("/app/utilities/new")}>Add connection</Button>
+        </div>
       </div>
 
-      <div className="mb-4">
-        <select
-          className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
-          value={officeId}
-          onChange={(e) => setSearchParams({ officeId: e.target.value })}
-        >
-          {offices.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      {showImport && (
+        <BulkImportPanel
+          header="office_code,utility_type,provider_name,meter_account_no,billing_cycle,vendor_id,start_date"
+          examples="MUM-HQ,electricity,BEST,1234567890,monthly,,"
+          onImport={async (csv) => {
+            const result = await bulkImportUtilityAccounts({ csv });
+            await refetch();
+            return result;
+          }}
+        />
+      )}
 
       <ErrorBanner error={accountsError} />
 
@@ -83,16 +90,15 @@ export function UtilitiesListPage() {
       )}
 
       {!accountsLoading && accounts && accounts.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-neutral-500">
+          <table className="table-shell">
+            <thead>
               <tr>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Provider</th>
-                <th className="px-4 py-3">Account / meter no.</th>
-                <th className="px-4 py-3">Billing cycle</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
+                <th className="table-head-cell">Type</th>
+                <th className="table-head-cell">Provider</th>
+                <th className="table-head-cell">Account / meter no.</th>
+                <th className="table-head-cell">Billing cycle</th>
+                <th className="table-head-cell">Status</th>
+                <th className="table-head-cell" />
               </tr>
             </thead>
             <tbody>
@@ -102,21 +108,18 @@ export function UtilitiesListPage() {
                   className="cursor-pointer border-t border-neutral-100 hover:bg-neutral-50"
                   onClick={() => navigate(`/app/utilities/${a.id}`)}
                 >
-                  <td className="px-4 py-3 text-neutral-600">{a.utility_type.replace("_", " ")}</td>
-                  <td className="px-4 py-3 font-medium text-neutral-900">{a.provider_name}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{a.meter_account_no}</td>
-                  <td className="px-4 py-3 text-neutral-600">{a.billing_cycle}</td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[a.status]}`}>
-                      {a.status}
-                    </span>
+                  <td className="table-cell text-neutral-600">{sentenceCase(a.utility_type)}</td>
+                  <td className="table-cell font-medium text-neutral-900">{a.provider_name}</td>
+                  <td className="table-cell font-mono text-xs">{a.meter_account_no}</td>
+                  <td className="table-cell text-neutral-600">{sentenceCase(a.billing_cycle)}</td>
+                  <td className="table-cell">
+                    <Badge tone={STATUS_TONE[a.status] ?? "neutral"}>{sentenceCase(a.status)}</Badge>
                   </td>
-                  <td className="px-4 py-3 text-right text-primary-600 underline">View</td>
+                  <td className="table-cell text-right text-primary-600 underline">View</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
       )}
     </div>
   );

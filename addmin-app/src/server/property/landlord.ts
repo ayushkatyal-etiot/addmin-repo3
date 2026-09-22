@@ -5,7 +5,7 @@ import { assertRole, type Role } from "../shared/authz";
 // Build Step 08 (planmysaas-blueprint/08-build-playbook.md): Property &
 // Lease Module, F-12/F-13. Landlord is org-wide (not office-scoped) since
 // the same landlord can own multiple offices' leases.
-const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
+export const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
 
 type CreateLandlordInput = {
   name: string;

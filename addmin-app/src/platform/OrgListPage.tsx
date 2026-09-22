@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { platformApiUrl } from "./apiBase";
+import { Badge } from "../shared/components/Badge";
 
 type OrgRow = {
   id: string;
@@ -43,39 +44,32 @@ export function OrgListPage() {
       )}
 
       {orgs && orgs.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-neutral-500">
+          <table className="table-shell">
+            <thead>
               <tr>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Tenant status</th>
-                <th className="px-4 py-3">Plan</th>
-                <th className="px-4 py-3">Subscription</th>
-                <th className="px-4 py-3">Trial ends</th>
-                <th className="px-4 py-3" />
+                <th className="table-head-cell">Name</th>
+                <th className="table-head-cell">Tenant status</th>
+                <th className="table-head-cell">Plan</th>
+                <th className="table-head-cell">Subscription</th>
+                <th className="table-head-cell">Trial ends</th>
+                <th className="table-head-cell" />
               </tr>
             </thead>
             <tbody>
               {orgs.map((org) => (
-                <tr key={org.id} className="border-t border-neutral-100">
-                  <td className="px-4 py-3 font-medium text-neutral-900">{org.name}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                        org.tenant_status === "suspended"
-                          ? "bg-red-100 text-red-700"
-                          : "bg-primary-100 text-primary-800"
-                      }`}
-                    >
+                <tr key={org.id} className="table-row-hover">
+                  <td className="table-cell font-medium text-neutral-900">{org.name}</td>
+                  <td className="table-cell">
+                    <Badge tone={org.tenant_status === "suspended" ? "danger" : "success"}>
                       {org.tenant_status}
-                    </span>
+                    </Badge>
                   </td>
-                  <td className="px-4 py-3 text-neutral-600">{org.plan ?? "—"}</td>
-                  <td className="px-4 py-3 text-neutral-600">{org.subscription_status ?? "—"}</td>
-                  <td className="px-4 py-3 text-neutral-600">
+                  <td className="table-cell text-neutral-600">{org.plan ?? "—"}</td>
+                  <td className="table-cell text-neutral-600">{org.subscription_status ?? "—"}</td>
+                  <td className="table-cell text-neutral-600">
                     {org.trial_ends_at ? new Date(org.trial_ends_at).toLocaleDateString() : "—"}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="table-cell text-right">
                     <Link
                       to={`/platform/organizations/${org.id}`}
                       className="font-semibold text-primary-600 underline"
@@ -87,7 +81,6 @@ export function OrgListPage() {
               ))}
             </tbody>
           </table>
-        </div>
       )}
     </div>
   );

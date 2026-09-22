@@ -7,20 +7,33 @@ import {
   recordVendorPerformanceReview,
   createAmcContract,
   listAmcContracts,
-  listOffices,
   listUtilityAccounts,
 } from "wasp/client/operations";
+import { useSelectedOffice } from "../../shared/SelectedOfficeContext";
 import { Button } from "../../shared/components/Button";
+import { DatePicker } from "../../shared/components/DatePicker";
+import { Badge, type BadgeTone } from "../../shared/components/Badge";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
+import { sentenceCase } from "../../shared/text";
 
 const inputClass =
   "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-800 shadow-xs focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500";
 
-const AMC_STATUS_CLASS: Record<string, string> = {
-  active: "bg-primary-100 text-primary-800",
-  due_for_renewal: "bg-amber-100 text-amber-800",
-  expired: "bg-red-100 text-red-700",
-  closed: "bg-neutral-100 text-neutral-500",
+const AMC_STATUS_TONE: Record<string, BadgeTone> = {
+  active: "success",
+  due_for_renewal: "warning",
+  expired: "danger",
+  closed: "neutral",
+};
+
+const INSTANCE_STATUS_TONE: Record<string, BadgeTone> = {
+  expected: "neutral",
+  received: "success",
+  missing: "danger",
+  in_process: "warning",
+  closed: "neutral",
+  cancelled: "neutral",
+  waived: "neutral",
 };
 
 const LINK_TYPES = ["office", "utility_account"];
@@ -41,21 +54,20 @@ export function VendorDetailPage() {
     vendorId ? { vendorId } : undefined,
     { enabled: !!vendorId },
   );
-  const { data: offices } = useQuery(listOffices);
+  const { officeId: selectedOfficeId } = useSelectedOffice();
 
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // AMC form state
   const [linkType, setLinkType] = useState(LINK_TYPES[0]);
-  const [linkOfficeId, setLinkOfficeId] = useState("");
   const [linkAccountId, setLinkAccountId] = useState("");
   const [amcStart, setAmcStart] = useState("");
   const [amcEnd, setAmcEnd] = useState("");
   const { data: accountsForOffice } = useQuery(
     listUtilityAccounts,
-    linkOfficeId ? { officeId: linkOfficeId } : undefined,
-    { enabled: !!linkOfficeId && linkType === "utility_account" },
+    selectedOfficeId ? { officeId: selectedOfficeId } : undefined,
+    { enabled: !!selectedOfficeId && linkType === "utility_account" },
   );
 
   // Performance review form state
@@ -87,7 +99,7 @@ export function VendorDetailPage() {
     }
   }
 
-  const linkedEntityId = linkType === "office" ? linkOfficeId : linkAccountId;
+  const linkedEntityId = linkType === "office" ? selectedOfficeId : linkAccountId;
 
   return (
     <div className="mx-auto w-full max-w-3xl p-12">
@@ -126,40 +138,29 @@ export function VendorDetailPage() {
               <div>
                 <label className="label">Linked to</label>
                 <select
-                  className={inputClass}
+                  className="select-field"
                   value={linkType}
                   onChange={(e) => {
                     setLinkType(e.target.value);
-                    setLinkOfficeId("");
                     setLinkAccountId("");
                   }}
                 >
                   {LINK_TYPES.map((t) => (
                     <option key={t} value={t}>
-                      {t.replace("_", " ")}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="label">Office</label>
-                <select className={inputClass} value={linkOfficeId} onChange={(e) => setLinkOfficeId(e.target.value)}>
-                  <option value="" disabled>
-                    Select an office
-                  </option>
-                  {(offices ?? []).map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name}
+                      {sentenceCase(t)}
                     </option>
                   ))}
                 </select>
               </div>
             </div>
+            <p className="text-xs text-neutral-500">
+              Office links use the office selected in the top bar.
+            </p>
 
-            {linkType === "utility_account" && linkOfficeId && (
+            {linkType === "utility_account" && selectedOfficeId && (
               <div>
                 <label className="label">Utility connection</label>
-                <select className={inputClass} value={linkAccountId} onChange={(e) => setLinkAccountId(e.target.value)}>
+                <select className="select-field" value={linkAccountId} onChange={(e) => setLinkAccountId(e.target.value)}>
                   <option value="" disabled>
                     Select a connection
                   </option>
@@ -175,11 +176,11 @@ export function VendorDetailPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Start date</label>
-                <input type="date" className={inputClass} value={amcStart} onChange={(e) => setAmcStart(e.target.value)} />
+                <DatePicker className={inputClass} value={amcStart} onChange={setAmcStart} />
               </div>
               <div>
                 <label className="label">End date</label>
-                <input type="date" className={inputClass} value={amcEnd} onChange={(e) => setAmcEnd(e.target.value)} />
+                <DatePicker className={inputClass} value={amcEnd} onChange={setAmcEnd} />
               </div>
             </div>
 
@@ -197,7 +198,6 @@ export function VendorDetailPage() {
                   });
                   setAmcStart("");
                   setAmcEnd("");
-                  setLinkOfficeId("");
                   setLinkAccountId("");
                 })
               }
@@ -210,31 +210,77 @@ export function VendorDetailPage() {
         {(amcContracts?.length ?? 0) === 0 ? (
           <p className="text-sm text-neutral-500">No AMC contracts yet.</p>
         ) : (
-          <div className="overflow-hidden rounded-md border border-neutral-200">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-neutral-50 text-neutral-500">
-                <tr>
-                  <th className="px-4 py-3">Linked to</th>
-                  <th className="px-4 py-3">Start</th>
-                  <th className="px-4 py-3">End</th>
-                  <th className="px-4 py-3">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {amcContracts!.map((c) => (
-                  <tr key={c.id} className="border-t border-neutral-100">
-                    <td className="px-4 py-3 text-neutral-600">{c.linked_entity_type.replace("_", " ")}</td>
-                    <td className="px-4 py-3 text-neutral-600">{new Date(c.start_date).toLocaleDateString()}</td>
-                    <td className="px-4 py-3 text-neutral-600">{new Date(c.end_date).toLocaleDateString()}</td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${AMC_STATUS_CLASS[c.status]}`}>
-                        {c.status.replace("_", " ")}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex flex-col gap-6">
+            {amcContracts!.map((c) => (
+              <div key={c.id} className="overflow-hidden rounded-md border border-neutral-200">
+                <table className="table-shell">
+                  <thead>
+                    <tr>
+                      <th className="table-head-cell">Linked to</th>
+                      <th className="table-head-cell">Start</th>
+                      <th className="table-head-cell">End</th>
+                      <th className="table-head-cell">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="table-row-hover">
+                      <td className="table-cell text-neutral-600">{sentenceCase(c.linked_entity_type)}</td>
+                      <td className="table-cell text-neutral-600">{new Date(c.start_date).toLocaleDateString()}</td>
+                      <td className="table-cell text-neutral-600">{new Date(c.end_date).toLocaleDateString()}</td>
+                      <td className="table-cell">
+                        <Badge tone={AMC_STATUS_TONE[c.status] ?? "neutral"}>{sentenceCase(c.status)}</Badge>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div className="border-t border-neutral-100 bg-neutral-50/50 px-4 py-4">
+                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                    Renewal obligation schedule
+                  </h3>
+                  {!c.schedule && (
+                    <p className="text-sm text-neutral-500">No obligation schedule linked to this contract.</p>
+                  )}
+                  {c.schedule && (
+                    <p className="mb-3 text-sm text-neutral-600">
+                      Notice window: {c.schedule.expected_window_days} days before contract end · anchor{" "}
+                      {new Date(c.schedule.active_from).toLocaleDateString()}
+                    </p>
+                  )}
+                  {c.schedule && c.obligation_instances.length === 0 && (
+                    <p className="text-sm text-neutral-500">
+                      No renewal obligation instance yet — one is created when you enter the notice window (contract end
+                      minus {c.schedule.expected_window_days} days). Refresh this page after that date, or adjust the
+                      contract end date for testing.
+                    </p>
+                  )}
+                  {c.obligation_instances.length > 0 && (
+                    <table className="table-shell">
+                      <thead>
+                        <tr>
+                          <th className="py-2 pr-4">Period</th>
+                          <th className="py-2 pr-4">Expected by</th>
+                          <th className="py-2">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {c.obligation_instances.map((i) => (
+                          <tr key={i.id} className="table-row-hover">
+                            <td className="py-2 pr-4 font-medium text-neutral-900">{i.period}</td>
+                            <td className="py-2 pr-4 text-neutral-600">
+                              {new Date(i.expected_date).toLocaleDateString()}
+                            </td>
+                            <td className="py-2">
+                              <Badge tone={INSTANCE_STATUS_TONE[i.status] ?? "neutral"}>{sentenceCase(i.status)}</Badge>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -269,7 +315,7 @@ export function VendorDetailPage() {
             </div>
             <div>
               <label className="label">Quality rating</label>
-              <select className={inputClass} value={qualityRating} onChange={(e) => setQualityRating(e.target.value)}>
+              <select className="select-field" value={qualityRating} onChange={(e) => setQualityRating(e.target.value)}>
                 {[1, 2, 3, 4, 5].map((n) => (
                   <option key={n} value={n}>
                     {n}

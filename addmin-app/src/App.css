@@ -35,6 +35,126 @@ body {
   @apply text-sm font-medium text-neutral-700;
 }
 
+/* Sidebar (Sample Dashboard.dc.html) -- shared shape for every nav item;
+   active/inactive is just Tailwind color classes on top, same pattern as
+   `card`/`label` above. */
+@utility nav-item {
+  @apply flex items-center gap-2 rounded-md px-2 py-2 text-sm font-medium;
+}
+
+@utility nav-section-label {
+  @apply px-2 text-xs font-semibold tracking-wide text-neutral-400 uppercase;
+}
+
+/* Data tables (Offices List.dc.html) -- the shared shape for every table in
+   the app: card-like shell, plain-case header row, generously padded body
+   cells. Applied to <table>/<th>/<td> directly rather than a Table.tsx
+   wrapper, since each page's columns/renderers differ too much to share one
+   component -- only the visual language is shared. */
+@utility table-shell {
+  @apply w-full border-collapse overflow-hidden rounded-xl border border-neutral-100 bg-white text-left text-sm;
+}
+
+@utility table-head-cell {
+  @apply border-b border-neutral-100 px-5 py-4 text-sm font-semibold text-neutral-500;
+}
+
+@utility table-cell {
+  @apply border-b border-neutral-100 px-5 py-5 align-middle text-neutral-900;
+}
+
+@utility table-row-hover {
+  @apply transition-colors hover:bg-neutral-50;
+}
+
+/* Every <select> in the app (design system's Select.jsx spec, first applied
+   in src/client/offices/NewOfficePage.tsx) -- 38px tall, border-only focus,
+   no shadow/ring. Distinct from text <input>s, which keep a soft focus ring
+   (see each page's local `inputClass`). */
+@utility select-field {
+  @apply h-9.5 w-full rounded-md border border-neutral-300 bg-white px-3 text-neutral-800 outline-hidden focus:border-primary-500;
+}
+
+/* Auth/onboarding flow (Login Flow.dc.html) -- reusable across sign in, sign
+   up, MFA, password reset, email verification, add office, onboarding
+   wizard, and setup review. See src/shared/components/auth/. */
+@utility auth-screen {
+  @apply relative flex min-h-screen w-full flex-col items-start overflow-hidden bg-cover bg-center p-8;
+}
+
+@utility auth-screen-rings {
+  @apply pointer-events-none absolute inset-0 z-0 overflow-hidden;
+
+  & span {
+    @apply absolute bottom-0 left-1/2 rounded-full border;
+    border-color: rgba(255, 255, 255, 0.7);
+    transform: translate(-50%, 50%);
+  }
+  & span:nth-child(1) {
+    width: 520px;
+    height: 520px;
+  }
+  & span:nth-child(2) {
+    width: 760px;
+    height: 760px;
+    border-color: rgba(255, 255, 255, 0.5);
+  }
+  & span:nth-child(3) {
+    width: 1000px;
+    height: 1000px;
+    border-color: rgba(255, 255, 255, 0.32);
+  }
+}
+
+@utility auth-screen-logo {
+  @apply relative z-10 inline-flex w-fit items-center rounded-lg bg-white/90 px-3 py-2 shadow-xs;
+
+  & img {
+    @apply w-24 object-contain;
+    height: auto;
+  }
+}
+
+@utility auth-card {
+  @apply relative z-10 box-border w-full rounded-xl border border-white/90 bg-gradient-to-br from-white/80 via-white/60 to-primary-50/60 px-6 py-8 shadow-2xl backdrop-blur-2xl;
+}
+
+@utility auth-card-icon {
+  @apply mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-lg bg-white text-primary-600 shadow-md;
+}
+
+@utility auth-field {
+  @apply mb-3 flex h-11 items-center gap-2 rounded-md border border-neutral-200 bg-white px-3;
+
+  & input {
+    @apply min-w-0 flex-1 border-none bg-transparent text-sm text-neutral-900 outline-hidden placeholder:text-neutral-400;
+  }
+}
+
+@utility auth-field-icon {
+  @apply flex shrink-0 items-center text-neutral-400;
+}
+
+@utility auth-field-toggle {
+  @apply flex shrink-0 cursor-pointer items-center border-none bg-transparent p-0 text-neutral-400;
+}
+
+@utility auth-otp-box {
+  @apply h-13 w-12 rounded-md border border-neutral-200 bg-white text-center text-xl text-neutral-900 outline-hidden focus:border-primary-500 focus:ring-1 focus:ring-primary-500;
+}
+
+/* Wide wizard screens (add office, onboarding checklist, setup review --
+   Login Flow.dc.html panels 7-9): same glass-panel language as auth-card,
+   but top-aligned under a WizardHeader instead of centered with an icon
+   baked into the card. */
+@utility auth-panel {
+  @apply relative z-10 w-full rounded-xl border border-white/90 bg-gradient-to-br from-white/80 via-white/60 to-primary-50/60 p-8 shadow-2xl backdrop-blur-2xl;
+}
+
+@utility auth-panel-icon {
+  @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-white text-primary-600 shadow-xs;
+}
+
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: 'Geist Variable', sans-serif;

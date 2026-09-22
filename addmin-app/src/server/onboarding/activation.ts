@@ -7,7 +7,7 @@ import { CHECKLIST_TEMPLATE } from "./checklistTemplates";
 // activation gate. Deliberately never reads Subscription/billing status --
 // F-05's user flow is explicit that office activation is never blocked by
 // trial/plan state (that's Step 05's concern entirely).
-const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
+export const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
 
 type ActivateOfficeInput = { officeId: string };
 type ActivateOfficeResult = { success: true } | { success: false; missingItems: string[] };

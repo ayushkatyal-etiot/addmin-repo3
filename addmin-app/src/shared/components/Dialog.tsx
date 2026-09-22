@@ -6,6 +6,10 @@ interface DialogProps {
   open: boolean;
   onClose: () => void;
   closeOnClickOutside?: boolean;
+  /** `center` = viewport-centered overlay; `top` = upper third (legacy default). */
+  placement?: "center" | "top";
+  /** Extra classes on the native `<dialog>` element. */
+  dialogClassName?: string;
   children?: ReactNode;
 }
 
@@ -14,6 +18,8 @@ export function Dialog({
   onClose,
   children,
   closeOnClickOutside = true,
+  placement = "top",
+  dialogClassName,
 }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
@@ -54,8 +60,13 @@ export function Dialog({
     <dialog
       ref={dialogRef}
       className={twJoin(
-        "max-h top-[20vh] my-0 flex max-h-[55vh]",
+        // Without this, Tailwind `display:flex` keeps a closed <dialog> visible on screen.
+        "hidden open:flex",
+        placement === "center"
+          ? "fixed inset-0 m-0 h-full max-h-none w-full max-w-none items-center justify-center p-0"
+          : "top-[20vh] my-0 max-h-[55vh]",
         "bg-transparent backdrop:bg-black/50 backdrop:backdrop-blur-xs",
+        dialogClassName,
       )}
       onClose={onClose}
       onClick={handleClick}

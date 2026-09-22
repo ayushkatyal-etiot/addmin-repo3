@@ -1,16 +1,21 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { useQuery, listVendors, createVendor } from "wasp/client/operations";
+import { useAuth } from "wasp/client/auth";
+import { useQuery, listVendors, createVendor, bulkImportVendors, getMyUserContext } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
+import { Badge, type BadgeTone } from "../../shared/components/Badge";
+import { BulkImportPanel } from "../../shared/components/BulkImportPanel";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
+import { PageLoading } from "../../shared/components/PageLoading";
+import { sentenceCase } from "../../shared/text";
 
 const CATEGORIES = ["utility_provider", "dg", "ups", "solar", "amc", "building_mgmt", "other"];
 
-const STATUS_CLASS: Record<string, string> = {
-  pending_activation: "bg-amber-100 text-amber-800",
-  active: "bg-primary-100 text-primary-800",
-  suspended: "bg-red-100 text-red-700",
-  inactive: "bg-neutral-100 text-neutral-500",
+const STATUS_TONE: Record<string, BadgeTone> = {
+  pending_activation: "warning",
+  active: "success",
+  suspended: "danger",
+  inactive: "neutral",
 };
 
 const inputClass =
@@ -20,8 +25,18 @@ const inputClass =
 // from the detail page once documents are validated.
 export function VendorListPage() {
   const navigate = useNavigate();
-  const { data: vendors, isLoading, error: loadError, refetch } = useQuery(listVendors);
+  const { data: user, isLoading: authLoading } = useAuth();
+  const { data: userContext, isLoading: contextLoading } = useQuery(getMyUserContext, undefined, {
+    enabled: !!user,
+  });
+  const canManageVendors = userContext?.canManageVendors ?? false;
 
+  const { data: vendors, isLoading, error: loadError, refetch } = useQuery(listVendors, undefined, {
+    enabled: !!user,
+  });
+
+  const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [name, setName] = useState("");
   const [category, setCategory] = useState(CATEGORIES[0]);
   const [panGstin, setPanGstin] = useState("");
@@ -36,6 +51,7 @@ export function VendorListPage() {
       await createVendor({ name, category, pan_gstin: panGstin || undefined });
       setName("");
       setPanGstin("");
+      setShowForm(false);
       await refetch();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not register vendor.");
@@ -44,58 +60,105 @@ export function VendorListPage() {
     }
   }
 
-  if (isLoading) return null;
+  if (authLoading || contextLoading || isLoading) return <PageLoading />;
 
   return (
     <div className="mx-auto w-full max-w-4xl p-12">
-      <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Vendors</h1>
+      <div className="mb-6 flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold text-neutral-900">Vendors</h1>
+        {canManageVendors && (
+          <div className="flex items-center gap-5">
+            <button
+              type="button"
+              onClick={() => setShowImport((v) => !v)}
+              className="text-sm font-semibold text-primary-600 underline"
+            >
+              Bulk import (CSV)
+            </button>
+            <Button type="button" onClick={() => setShowForm((open) => !open)}>
+              {showForm ? "Cancel" : "Add vendor"}
+            </Button>
+          </div>
+        )}
+      </div>
 
       <ErrorBanner error={loadError} />
 
-      <form onSubmit={onSubmit} className="card mb-8 flex flex-col gap-4 p-8">
-        <h2 className="text-lg font-semibold text-neutral-900">Register a vendor</h2>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="label">Name</label>
-            <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} required />
+      {canManageVendors && showImport && (
+        <BulkImportPanel
+          header="name,category,pan_gstin"
+          examples="Acme DG Services,dg,29ABCDE1234F1Z5"
+          onImport={async (csv) => {
+            const result = await bulkImportVendors({ csv });
+            await refetch();
+            return result;
+          }}
+        />
+      )}
+
+      {canManageVendors && showForm && (
+        <form onSubmit={onSubmit} className="card mb-8 flex flex-col gap-4 p-8">
+          <h2 className="text-lg font-semibold text-neutral-900">Register a vendor</h2>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="label">Name</label>
+              <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} required />
+            </div>
+            <div>
+              <label className="label">Category</label>
+              <select className="select-field" value={category} onChange={(e) => setCategory(e.target.value)}>
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {sentenceCase(c)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label">PAN / GSTIN (optional)</label>
+              <input className={inputClass} value={panGstin} onChange={(e) => setPanGstin(e.target.value)} />
+            </div>
           </div>
-          <div>
-            <label className="label">Category</label>
-            <select className={inputClass} value={category} onChange={(e) => setCategory(e.target.value)}>
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {c.replace("_", " ")}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="label">PAN / GSTIN (optional)</label>
-            <input className={inputClass} value={panGstin} onChange={(e) => setPanGstin(e.target.value)} />
-          </div>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <Button type="submit" disabled={isSubmitting || !name} className="self-start">
+            Register vendor
+          </Button>
+        </form>
+      )}
+
+      {!canManageVendors && userContext?.role && (
+        <p className="mb-4 text-sm text-neutral-500">
+          Your role ({userContext.role.replace(/_/g, " ")}) can view vendors. Only platform admins and vendor managers
+          can register new vendors.
+        </p>
+      )}
+
+      {!loadError && (vendors?.length ?? 0) === 0 && (
+        <div className="card p-8 text-center text-neutral-500">
+          {canManageVendors
+            ? "No vendors in your organization yet — click Add vendor to register one."
+            : "No vendors registered yet. Ask a platform admin or vendor manager to register vendors."}
         </div>
+      )}
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
-
-        <Button type="submit" disabled={isSubmitting || !name} className="self-start">
-          Register vendor
-        </Button>
-      </form>
-
-      {vendors?.length === 0 && (
-        <div className="card p-8 text-center text-neutral-500">No vendors registered yet.</div>
+      {loadError && (
+        <p className="text-xs text-neutral-500">
+          If this mentions MFA, complete setup at <code className="text-xs">/mfa-setup</code> or verify at{" "}
+          <code className="text-xs">/mfa-verify</code>, then refresh.
+        </p>
       )}
 
       {vendors && vendors.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-neutral-500">
+          <table className="table-shell">
+            <thead>
               <tr>
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">PAN / GSTIN</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
+                <th className="table-head-cell">Name</th>
+                <th className="table-head-cell">Category</th>
+                <th className="table-head-cell">PAN / GSTIN</th>
+                <th className="table-head-cell">Status</th>
+                <th className="table-head-cell" />
               </tr>
             </thead>
             <tbody>
@@ -105,20 +168,17 @@ export function VendorListPage() {
                   className="cursor-pointer border-t border-neutral-100 hover:bg-neutral-50"
                   onClick={() => navigate(`/app/vendors/${v.id}`)}
                 >
-                  <td className="px-4 py-3 font-medium text-neutral-900">{v.name}</td>
-                  <td className="px-4 py-3 text-neutral-600">{v.category.replace("_", " ")}</td>
-                  <td className="px-4 py-3 text-neutral-600">{v.pan_gstin ?? "—"}</td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[v.status]}`}>
-                      {v.status.replace("_", " ")}
-                    </span>
+                  <td className="table-cell font-medium text-neutral-900">{v.name}</td>
+                  <td className="table-cell text-neutral-600">{sentenceCase(v.category)}</td>
+                  <td className="table-cell text-neutral-600">{v.pan_gstin ?? "—"}</td>
+                  <td className="table-cell">
+                    <Badge tone={STATUS_TONE[v.status] ?? "neutral"}>{sentenceCase(v.status)}</Badge>
                   </td>
-                  <td className="px-4 py-3 text-right text-primary-600 underline">View</td>
+                  <td className="table-cell text-right text-primary-600 underline">View</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
       )}
     </div>
   );

@@ -9,6 +9,8 @@ import {
 } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
+import { useSelectedOffice } from "../../shared/SelectedOfficeContext";
+import { sentenceCase } from "../../shared/text";
 
 const SCOPE_TYPES = ["utility", "rent", "cam", "amc", "compliance"];
 
@@ -19,10 +21,11 @@ const inputClass =
 // with no max_amount is the catch-all/top tier for that office+scope.
 export function WorkflowAdminPage() {
   const { data: offices, isLoading: officesLoading } = useQuery(listOffices);
+  const { officeId: selectedOfficeId, selectedOffice } = useSelectedOffice();
   const { data: users, isLoading: usersLoading } = useQuery(listOrgUsers);
   const { data: definitions, isLoading: definitionsLoading, error: definitionsError, refetch } = useQuery(listWorkflowDefinitions);
 
-  const [officeId, setOfficeId] = useState("");
+  const [orgWideTier, setOrgWideTier] = useState(false);
   const [scopeType, setScopeType] = useState(SCOPE_TYPES[0]);
   const [tier, setTier] = useState("1");
   const [maxAmount, setMaxAmount] = useState("");
@@ -39,7 +42,7 @@ export function WorkflowAdminPage() {
     setIsSubmitting(true);
     try {
       await createWorkflowDefinition({
-        office_id: officeId || undefined,
+        office_id: orgWideTier ? undefined : selectedOfficeId || undefined,
         scope_type: scopeType as never,
         tier: Number(tier),
         max_amount: maxAmount ? Number(maxAmount) : undefined,
@@ -62,29 +65,33 @@ export function WorkflowAdminPage() {
   return (
     <div className="mx-auto w-full max-w-4xl p-12">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Approval workflow</h1>
-
       <ErrorBanner error={definitionsError} />
 
       <form onSubmit={onSubmit} className="card mb-8 flex flex-col gap-4 p-8">
         <h2 className="text-lg font-semibold text-neutral-900">Add threshold tier</h2>
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="label">Office</label>
-            <select className={inputClass} value={officeId} onChange={(e) => setOfficeId(e.target.value)}>
-              <option value="">All offices (org-wide default)</option>
-              {(offices ?? []).map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name}
-                </option>
-              ))}
-            </select>
+          <div className="col-span-2">
+            <label className="flex items-center gap-2 text-sm text-neutral-700">
+              <input
+                type="checkbox"
+                checked={orgWideTier}
+                onChange={(e) => setOrgWideTier(e.target.checked)}
+              />
+              Org-wide default (all offices)
+            </label>
+            {!orgWideTier && (
+              <p className="mt-1 text-xs text-neutral-500">
+                Otherwise applies to the office selected in the top bar
+                {selectedOffice ? `: ${selectedOffice.name}` : "."}
+              </p>
+            )}
           </div>
           <div>
             <label className="label">Scope</label>
-            <select className={inputClass} value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
+            <select className="select-field" value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
               {SCOPE_TYPES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {sentenceCase(s)}
                 </option>
               ))}
             </select>
@@ -106,7 +113,7 @@ export function WorkflowAdminPage() {
           </div>
           <div className="col-span-2">
             <label className="label">Approver</label>
-            <select className={inputClass} value={effectiveApprover} onChange={(e) => setApproverUserId(e.target.value)}>
+            <select className="select-field" value={effectiveApprover} onChange={(e) => setApproverUserId(e.target.value)}>
               {(users ?? []).map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.email} ({u.role})
@@ -123,27 +130,26 @@ export function WorkflowAdminPage() {
         </Button>
       </form>
 
-      <div className="card overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-neutral-50 text-neutral-500">
+        <table className="table-shell">
+          <thead>
             <tr>
-              <th className="px-4 py-3">Office</th>
-              <th className="px-4 py-3">Scope</th>
-              <th className="px-4 py-3">Tier</th>
-              <th className="px-4 py-3">Max amount</th>
-              <th className="px-4 py-3">Approver</th>
-              <th className="px-4 py-3" />
+              <th className="table-head-cell">Office</th>
+              <th className="table-head-cell">Scope</th>
+              <th className="table-head-cell">Tier</th>
+              <th className="table-head-cell">Max amount</th>
+              <th className="table-head-cell">Approver</th>
+              <th className="table-head-cell" />
             </tr>
           </thead>
           <tbody>
             {(definitions ?? []).map((d) => (
-              <tr key={d.id} className="border-t border-neutral-100">
-                <td className="px-4 py-3 text-neutral-600">{officeName(d.office_id)}</td>
-                <td className="px-4 py-3 text-neutral-600">{d.scope_type}</td>
-                <td className="px-4 py-3 text-neutral-600">{d.tier}</td>
-                <td className="px-4 py-3 text-neutral-600">{d.max_amount ?? "Uncapped"}</td>
-                <td className="px-4 py-3 text-neutral-600">{userEmail(d.approver_user_id)}</td>
-                <td className="px-4 py-3 text-right">
+              <tr key={d.id} className="table-row-hover">
+                <td className="table-cell text-neutral-600">{officeName(d.office_id)}</td>
+                <td className="table-cell text-neutral-600">{d.scope_type}</td>
+                <td className="table-cell text-neutral-600">{d.tier}</td>
+                <td className="table-cell text-neutral-600">{d.max_amount ?? "Uncapped"}</td>
+                <td className="table-cell text-neutral-600">{userEmail(d.approver_user_id)}</td>
+                <td className="table-cell text-right">
                   <button
                     className="text-red-600 underline"
                     onClick={() => deleteWorkflowDefinition({ id: d.id }).then(() => refetch())}
@@ -155,7 +161,6 @@ export function WorkflowAdminPage() {
             ))}
           </tbody>
         </table>
-      </div>
     </div>
   );
 }

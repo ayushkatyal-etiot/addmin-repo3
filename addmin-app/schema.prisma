@@ -53,8 +53,17 @@ model User {
   // blocked server-side once it exceeds their configured limit. Null = no
   // limit configured (org admin sets one via /admin/workflow's approver setup).
   authorization_limit Decimal?
+  // F-16: "Employee's manager approves" is a distinct step from Office
+  // Admin allocation -- nothing modeled a real approver for that before
+  // Step 08 needed one. Nullable self-relation, set by an admin
+  // (updateUserManager, src/server/organization/office.ts); an employee
+  // with none set can't submit an asset request yet (see
+  // createAssetRequest, src/server/asset/asset.ts).
+  manager_user_id String?
 
   organization Organization? @relation(fields: [org_id], references: [id])
+  manager      User?         @relation("UserManager", fields: [manager_user_id], references: [id])
+  directReports User[]       @relation("UserManager")
 
   officeSetupProfilesActivated OfficeSetupProfile[]     @relation("OfficeSetupProfileActivatedBy")
   checklistItemsOwned          OfficeChecklistItem[]    @relation("ChecklistItemOwner")
@@ -67,6 +76,10 @@ model User {
   workflowDefinitionsAssigned  WorkflowDefinition[]     @relation("WorkflowApprover")
   approvalStepsAssigned        ApprovalStep[]           @relation("ApprovalStepApprover")
   vendorPerformanceReviewsGiven VendorPerformanceReview[] @relation("VendorPerformanceReviewedBy")
+  workOrderEvidenceUploaded     WorkOrderEvidence[]       @relation("WorkOrderEvidenceUploadedBy")
+  assetAssignmentsHeld          AssetAssignment[]         @relation("AssetAssignmentCustodian")
+  assetRequestsSubmitted        AssetRequest[]            @relation("AssetRequestRequestedBy")
+  complianceDocumentsUploaded   ComplianceDocument[]      @relation("ComplianceDocumentUploadedBy")
 
   @@index([org_id])
 }
@@ -205,6 +218,7 @@ model Office {
   utilityAccounts  UtilityAccount[]
   leases           Lease[]
   assets           Asset[]
+  assetRequests    AssetRequest[]
   maintenanceRequests MaintenanceRequest[]
   complianceItems  ComplianceItem[]
   workflowDefinitions WorkflowDefinition[]
@@ -696,9 +710,14 @@ model WorkOrder {
   vendor_id                String?
   sla_due_at               DateTime
   status                   WorkOrderStatus
+  // F-15 edge case: "Admin verification finds it unsatisfactory -- request
+  // reopens with a remark, not silently closed." Only ever set by a reopen
+  // decision; a clean verify->closed leaves this null.
+  verification_remark      String?
 
-  maintenanceRequest MaintenanceRequest @relation(fields: [maintenance_request_id], references: [id])
-  vendor             Vendor?            @relation(fields: [vendor_id], references: [id])
+  maintenanceRequest MaintenanceRequest    @relation(fields: [maintenance_request_id], references: [id])
+  vendor             Vendor?               @relation(fields: [vendor_id], references: [id])
+  evidence           WorkOrderEvidence[]
 
   @@index([org_id])
 }
@@ -708,6 +727,33 @@ enum WorkOrderStatus {
   in_progress
   completed
   verified
+}
+
+// F-15: "Photo/video evidence is timestamped and attributed to the
+// uploader, with before/after distinguished." doc_ref is a plain string
+// (not a Document FK) for the same reason UtilityBill.invoice_doc_id and
+// ComplianceItem.document_id are -- the Document module isn't modeled yet
+// (see schema.prisma's file header); this captures the metadata now so
+// nothing needs backfilling once real uploads exist.
+model WorkOrderEvidence {
+  id            String       @id @default(uuid())
+  org_id        String
+  work_order_id String
+  kind          EvidenceKind
+  doc_ref       String
+  comment       String?
+  uploaded_by   String
+  uploaded_at   DateTime     @default(now())
+
+  workOrder  WorkOrder @relation(fields: [work_order_id], references: [id])
+  uploadedBy User      @relation("WorkOrderEvidenceUploadedBy", fields: [uploaded_by], references: [id])
+
+  @@index([org_id])
+}
+
+enum EvidenceKind {
+  before
+  after
 }
 
 // --- Asset Module ------------------------------------------------------
@@ -723,8 +769,8 @@ model Asset {
 
   office Office @relation(fields: [office_id], references: [id])
 
-  // "-> has many AssetAssignment" in 04-architecture.md is not modeled yet --
-  // see file header. AssetAssignment/AssetRequest are introduced in Step 08.
+  assignments      AssetAssignment[]
+  requestsAllocated AssetRequest[]
 
   @@index([org_id])
 }
@@ -736,6 +782,57 @@ enum AssetStatus {
   retired
 }
 
+// F-16: custody history, not a single custodian field on Asset -- "Asset
+// marked Retired still shows historical assignment/service records for
+// audit, but can't be reassigned" only holds if custody is an append-only
+// log. Current custodian = the row with unassigned_at null.
+model AssetAssignment {
+  id                String    @id @default(uuid())
+  org_id            String
+  asset_id          String
+  custodian_user_id String
+  assigned_at       DateTime  @default(now())
+  unassigned_at     DateTime?
+
+  asset     Asset @relation(fields: [asset_id], references: [id])
+  custodian User  @relation("AssetAssignmentCustodian", fields: [custodian_user_id], references: [id])
+
+  @@index([org_id])
+}
+
+// F-16: Employee -> Manager -> Admin -> allocation. manager_remark is set
+// on reject/return (User.manager_user_id resolves who decides -- see
+// schema.prisma's User model); admin_remark covers the procurement handoff
+// note. allocated_asset_id is set the moment status becomes closed.
+model AssetRequest {
+  id                 String             @id @default(uuid())
+  org_id             String
+  office_id          String
+  requested_by       String
+  category           String
+  reason             String
+  status             AssetRequestStatus
+  manager_remark     String?
+  admin_remark       String?
+  allocated_asset_id String?
+  created_at         DateTime           @default(now())
+
+  office         Office @relation(fields: [office_id], references: [id])
+  requestedBy    User   @relation("AssetRequestRequestedBy", fields: [requested_by], references: [id])
+  allocatedAsset Asset? @relation(fields: [allocated_asset_id], references: [id])
+
+  @@index([org_id])
+}
+
+enum AssetRequestStatus {
+  pending_manager_approval
+  rejected
+  returned
+  pending_allocation
+  procurement_pending
+  closed
+}
+
 // --- Compliance Module -----------------------------------------------------
 
 model ComplianceItem {
@@ -744,12 +841,42 @@ model ComplianceItem {
   office_id        String
   compliance_type  String
   status           ComplianceItemStatus
+  // Cached from the latest ComplianceDocument (below) so status computation
+  // doesn't need a join on every read -- the documents relation is the
+  // actual source of truth / audit trail.
   expiry_date      DateTime?            @db.Date
   // References Document (Document Module, 04-architecture.md) -- not yet
   // modeled, see file header. Plain id, not a Prisma relation, for now.
+  // Mirrors the latest ComplianceDocument.id once one exists.
   document_id      String?
+  escalated_at     DateTime?
 
-  office Office @relation(fields: [office_id], references: [id])
+  office    Office               @relation(fields: [office_id], references: [id])
+  documents ComplianceDocument[]
+
+  // F-17: "Organization-defined custom certificate types behave identically
+  // to seeded types" is only true if compliance_type is free text (it is)
+  // and this natural key is per-office, not global -- a custom type an org
+  // adds for one office doesn't collide with another office's item of the
+  // same type.
+  @@unique([office_id, compliance_type])
+  @@index([org_id])
+}
+
+// F-17 edge case: "Multiple documents uploaded for the same certificate
+// over time -- full document history is retained, not overwritten." One
+// row per upload; ComplianceItem.expiry_date/document_id cache the latest.
+model ComplianceDocument {
+  id                  String   @id @default(uuid())
+  org_id              String
+  compliance_item_id  String
+  doc_ref             String
+  expiry_date         DateTime @db.Date
+  uploaded_by         String
+  uploaded_at         DateTime @default(now())
+
+  complianceItem ComplianceItem @relation(fields: [compliance_item_id], references: [id])
+  uploadedBy     User           @relation("ComplianceDocumentUploadedBy", fields: [uploaded_by], references: [id])
 
   @@index([org_id])
 }
@@ -880,4 +1007,5 @@ enum NotificationRuleType {
   lease_renewal
   amc_renewal
   compliance_expiry
+  asset_warranty_expiry
 }

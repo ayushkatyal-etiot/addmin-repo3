@@ -2,7 +2,7 @@ import { HttpError } from "wasp/server";
 import type { WaiveMissingItem } from "wasp/server/operations";
 import { assertRole, type Role } from "../shared/authz";
 
-const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
+export const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
 
 type WaiveMissingItemInput = { instanceId: string; remark: string };
 

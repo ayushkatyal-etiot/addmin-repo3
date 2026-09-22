@@ -10,19 +10,22 @@ import {
   waiveMissingItem,
 } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
+import { DatePicker } from "../../shared/components/DatePicker";
+import { Badge, type BadgeTone } from "../../shared/components/Badge";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
+import { sentenceCase } from "../../shared/text";
 
 const inputClass =
   "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-800 shadow-xs focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500";
 
-const INSTANCE_STATUS_CLASS: Record<string, string> = {
-  expected: "bg-neutral-100 text-neutral-700",
-  received: "bg-primary-100 text-primary-800",
-  missing: "bg-red-100 text-red-700",
-  in_process: "bg-amber-100 text-amber-800",
-  closed: "bg-neutral-100 text-neutral-500",
-  cancelled: "bg-neutral-100 text-neutral-400",
-  waived: "bg-neutral-100 text-neutral-500",
+const INSTANCE_STATUS_TONE: Record<string, BadgeTone> = {
+  expected: "neutral",
+  received: "success",
+  missing: "danger",
+  in_process: "warning",
+  closed: "neutral",
+  cancelled: "neutral",
+  waived: "neutral",
 };
 
 // F-12/F-13: lease terms, rent/CAM payment recording with server-computed
@@ -174,28 +177,26 @@ export function LeaseDetailPage() {
 
       {lease.obligation_instances.length > 0 && (
         <div className="card mb-6 overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-neutral-500">
+          <table className="table-shell">
+            <thead>
               <tr>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Period</th>
-                <th className="px-4 py-3">Expected date</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
+                <th className="table-head-cell">Type</th>
+                <th className="table-head-cell">Period</th>
+                <th className="table-head-cell">Expected date</th>
+                <th className="table-head-cell">Status</th>
+                <th className="table-head-cell" />
               </tr>
             </thead>
             <tbody>
               {lease.obligation_instances.map((i) => (
-                <tr key={i.id} className="border-t border-neutral-100">
-                  <td className="px-4 py-3 uppercase text-neutral-600">{i.scope_type}</td>
-                  <td className="px-4 py-3 font-medium text-neutral-900">{i.period}</td>
-                  <td className="px-4 py-3 text-neutral-600">{new Date(i.expected_date).toLocaleDateString()}</td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${INSTANCE_STATUS_CLASS[i.status]}`}>
-                      {i.status}
-                    </span>
+                <tr key={i.id} className="table-row-hover">
+                  <td className="table-cell uppercase text-neutral-600">{i.scope_type}</td>
+                  <td className="table-cell font-medium text-neutral-900">{i.period}</td>
+                  <td className="table-cell text-neutral-600">{new Date(i.expected_date).toLocaleDateString()}</td>
+                  <td className="table-cell">
+                    <Badge tone={INSTANCE_STATUS_TONE[i.status] ?? "neutral"}>{sentenceCase(i.status)}</Badge>
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="table-cell text-right">
                     {canManageLease && i.status === "missing" && waivingId !== i.id && (
                       <button
                         type="button"
@@ -244,19 +245,18 @@ export function LeaseDetailPage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Installment due date</label>
-                <input
-                  type="date"
+                <DatePicker
                   className={inputClass}
                   value={dueDate}
                   min={lease.start_date.slice(0, 10)}
                   max={lease.end_date.slice(0, 10)}
-                  onChange={(e) => setDueDate(e.target.value)}
+                  onChange={setDueDate}
                   required
                 />
               </div>
               <div>
                 <label className="label">Mode</label>
-                <select className={inputClass} value={mode} onChange={(e) => setMode(e.target.value)}>
+                <select className="select-field" value={mode} onChange={(e) => setMode(e.target.value)}>
                   <option value="bank_transfer">Bank transfer</option>
                   <option value="cheque">Cheque</option>
                   <option value="cash">Cash</option>
@@ -283,30 +283,30 @@ export function LeaseDetailPage() {
 
       {(payments?.length ?? 0) > 0 && (
         <div className="card mb-6 overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-neutral-500">
+          <table className="table-shell">
+            <thead>
               <tr>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Due date</th>
-                <th className="px-4 py-3">Period</th>
-                <th className="px-4 py-3">Gross</th>
-                <th className="px-4 py-3">TDS</th>
-                <th className="px-4 py-3">Net</th>
-                <th className="px-4 py-3">Mode</th>
+                <th className="table-head-cell">Type</th>
+                <th className="table-head-cell">Due date</th>
+                <th className="table-head-cell">Period</th>
+                <th className="table-head-cell">Gross</th>
+                <th className="table-head-cell">TDS</th>
+                <th className="table-head-cell">Net</th>
+                <th className="table-head-cell">Mode</th>
               </tr>
             </thead>
             <tbody>
               {payments!.map((p) => (
-                <tr key={p.id} className="border-t border-neutral-100">
-                  <td className="px-4 py-3 text-neutral-600">{p.payable_type}</td>
-                  <td className="px-4 py-3 text-neutral-600">
+                <tr key={p.id} className="table-row-hover">
+                  <td className="table-cell text-neutral-600">{p.payable_type}</td>
+                  <td className="table-cell text-neutral-600">
                     {p.due_date ? new Date(p.due_date).toLocaleDateString() : "—"}
                   </td>
-                  <td className="px-4 py-3 text-neutral-600">{p.period}</td>
-                  <td className="px-4 py-3 text-neutral-600">{p.amount}</td>
-                  <td className="px-4 py-3 text-neutral-600">{p.tds_amount ?? "—"}</td>
-                  <td className="px-4 py-3 font-medium text-neutral-900">{p.net_amount}</td>
-                  <td className="px-4 py-3 text-neutral-600">{p.mode}</td>
+                  <td className="table-cell text-neutral-600">{p.period}</td>
+                  <td className="table-cell text-neutral-600">{p.amount}</td>
+                  <td className="table-cell text-neutral-600">{p.tds_amount ?? "—"}</td>
+                  <td className="table-cell font-medium text-neutral-900">{p.net_amount}</td>
+                  <td className="table-cell text-neutral-600">{p.mode}</td>
                 </tr>
               ))}
             </tbody>

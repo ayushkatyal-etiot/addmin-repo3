@@ -4,7 +4,9 @@ import type {
   ConfirmMfaEnrollment,
   VerifyMfaLogin,
   GetMfaStatus,
+  GetMyUserContext,
 } from "wasp/server/operations";
+import { userFromSession } from "../shared/authz";
 import {
   generateMfaSecret,
   getMfaOtpAuthUri,
@@ -18,12 +20,27 @@ import {
 export const getMfaStatus: GetMfaStatus<void, { mfaEnabled: boolean; mfaRequired: boolean; mfaVerifiedThisWindow: boolean }> =
   async (_args, context) => {
     if (!context.user) throw new HttpError(401);
+    const user = await userFromSession(context.user, context.entities);
     return {
-      mfaEnabled: context.user.mfa_enabled,
-      mfaRequired: !!context.user.role && (MFA_REQUIRED_ROLES as readonly string[]).includes(context.user.role),
-      mfaVerifiedThisWindow: isMfaCurrentlyVerified(context.user.mfa_verified_until),
+      mfaEnabled: user.mfa_enabled,
+      mfaRequired: !!user.role && (MFA_REQUIRED_ROLES as readonly string[]).includes(user.role),
+      mfaVerifiedThisWindow: isMfaCurrentlyVerified(user.mfa_verified_until),
     };
   };
+
+/** UI permissions from the DB user row — useAuth() alone often lacks role/org_id. */
+export const getMyUserContext: GetMyUserContext<
+  void,
+  { role: string | null; canManageVendors: boolean }
+> = async (_args, context) => {
+  if (!context.user) throw new HttpError(401);
+  const user = await userFromSession(context.user, context.entities);
+  const role = user.role ?? null;
+  return {
+    role,
+    canManageVendors: role === "platform_admin" || role === "vendor_manager",
+  };
+};
 
 // Step 1 of enrollment: generate a secret + QR code. Not yet persisted as
 // mfa_enabled -- that only happens once the user proves they can generate a
@@ -56,15 +73,16 @@ export const confirmMfaEnrollment: ConfirmMfaEnrollment<ConfirmMfaEnrollmentInpu
   context,
 ) => {
   if (!context.user) throw new HttpError(401);
-  if (!context.user.mfa_secret) {
+  const user = await userFromSession(context.user, context.entities);
+  if (!user.mfa_secret) {
     throw new HttpError(400, "Call enrollMfa first.");
   }
-  if (!(await verifyMfaCode(context.user.mfa_secret, code))) {
+  if (!(await verifyMfaCode(user.mfa_secret, code))) {
     throw new HttpError(400, "Invalid or expired code.");
   }
 
   await context.entities.User.update({
-    where: { id: context.user.id },
+    where: { id: user.id },
     data: { mfa_enabled: true, mfa_verified_until: mfaVerifiedUntil() },
   });
 
@@ -82,15 +100,16 @@ export const verifyMfaLogin: VerifyMfaLogin<VerifyMfaLoginInput, { success: true
   context,
 ) => {
   if (!context.user) throw new HttpError(401);
-  if (!context.user.mfa_enabled || !context.user.mfa_secret) {
+  const user = await userFromSession(context.user, context.entities);
+  if (!user.mfa_enabled || !user.mfa_secret) {
     throw new HttpError(400, "MFA is not enabled for this account.");
   }
-  if (!(await verifyMfaCode(context.user.mfa_secret, code))) {
+  if (!(await verifyMfaCode(user.mfa_secret, code))) {
     throw new HttpError(401, "Invalid or expired code.");
   }
 
   await context.entities.User.update({
-    where: { id: context.user.id },
+    where: { id: user.id },
     data: { mfa_verified_until: mfaVerifiedUntil() },
   });
 

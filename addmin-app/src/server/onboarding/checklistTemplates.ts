@@ -50,6 +50,19 @@ export const CHECKLIST_CATEGORY_TITLES: Record<ChecklistCategory, string> = {
   role: "Roles",
 };
 
+// Gap-closing fix (F-04's "Selecting Yes immediately links to the real
+// module" requirement, previously unimplemented): the real module page an
+// admin should land on to actually configure a "Yes" item in this category.
+// No entry for `facility` -- there's no dedicated facility register page yet,
+// so those items stay owner-assignment-only until one exists.
+export const CHECKLIST_CATEGORY_MODULE_ROUTE: Partial<Record<ChecklistCategory, string>> = {
+  utility: "/app/utilities",
+  compliance: "/app/compliance",
+  vendor: "/app/vendors",
+  asset: "/app/assets",
+  role: "/admin/users",
+};
+
 export const CHECKLIST_TEMPLATE: ChecklistTemplateItem[] = [
   // --- Utilities ---------------------------------------------------------
   { code: "utility_electricity", category: "utility", label: "Electricity", yesLabel: "Yes", noLabel: "No" },

@@ -2,16 +2,18 @@ import { useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { useQuery, getUtilityAccount, deactivateUtilityAccount, waiveMissingItem } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
+import { Badge, type BadgeTone } from "../../shared/components/Badge";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
+import { sentenceCase } from "../../shared/text";
 
-const INSTANCE_STATUS_CLASS: Record<string, string> = {
-  expected: "bg-neutral-100 text-neutral-700",
-  received: "bg-primary-100 text-primary-800",
-  missing: "bg-red-100 text-red-700",
-  in_process: "bg-amber-100 text-amber-800",
-  closed: "bg-neutral-100 text-neutral-500",
-  cancelled: "bg-neutral-100 text-neutral-400",
-  waived: "bg-neutral-100 text-neutral-500",
+const INSTANCE_STATUS_TONE: Record<string, BadgeTone> = {
+  expected: "neutral",
+  received: "success",
+  missing: "danger",
+  in_process: "warning",
+  closed: "neutral",
+  cancelled: "neutral",
+  waived: "neutral",
 };
 
 // F-06/F-07/F-08: connection detail + obligation instance history. Bill
@@ -87,29 +89,26 @@ export function UtilityAccountDetailPage() {
       )}
 
       {account.instances.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-neutral-500">
+          <table className="table-shell">
+            <thead>
               <tr>
-                <th className="px-4 py-3">Period</th>
-                <th className="px-4 py-3">Expected date</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
+                <th className="table-head-cell">Period</th>
+                <th className="table-head-cell">Expected date</th>
+                <th className="table-head-cell">Status</th>
+                <th className="table-head-cell" />
               </tr>
             </thead>
             <tbody>
               {account.instances.map((i) => (
-                <tr key={i.id} className="border-t border-neutral-100">
-                  <td className="px-4 py-3 font-medium text-neutral-900">{i.period}</td>
-                  <td className="px-4 py-3 text-neutral-600">
+                <tr key={i.id} className="table-row-hover">
+                  <td className="table-cell font-medium text-neutral-900">{i.period}</td>
+                  <td className="table-cell text-neutral-600">
                     {new Date(i.expected_date).toLocaleDateString()}
                   </td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${INSTANCE_STATUS_CLASS[i.status]}`}>
-                      {i.status}
-                    </span>
+                  <td className="table-cell">
+                    <Badge tone={INSTANCE_STATUS_TONE[i.status] ?? "neutral"}>{sentenceCase(i.status)}</Badge>
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="table-cell text-right">
                     {i.status === "missing" && waivingId !== i.id && (
                       <button
                         className="font-semibold text-primary-600 underline"
@@ -123,7 +122,6 @@ export function UtilityAccountDetailPage() {
               ))}
             </tbody>
           </table>
-        </div>
       )}
 
       {waivingId && (

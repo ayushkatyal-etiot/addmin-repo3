@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { sendNotificationEmail } from "../notification/sender";
+import { ensureAmcRenewalObligation } from "./amcObligation";
 
 // Build Step 08, F-14: "Expired AMC without renewal action automatically
 // flags as Expired" + "renewal alerts trigger at 60- and 30-day intervals."
@@ -11,6 +12,8 @@ const DEFAULT_REMINDER_DAYS = [60, 30];
 type JobContext = {
   entities: {
     AMCContract: PrismaClient["aMCContract"];
+    RecurringObligationSchedule: PrismaClient["recurringObligationSchedule"];
+    ObligationInstance: PrismaClient["obligationInstance"];
     NotificationRule: PrismaClient["notificationRule"];
     NotificationLog: PrismaClient["notificationLog"];
     User: PrismaClient["user"];
@@ -36,6 +39,8 @@ export async function amcRenewalJob(_args: unknown, context: JobContext): Promis
   const ruleCache = new Map<string, number[]>();
 
   for (const contract of openContracts) {
+    await ensureAmcRenewalObligation(context.entities, contract.id, today);
+
     const daysToExpiry = daysBetween(contract.end_date, today);
 
     if (daysToExpiry < 0) {

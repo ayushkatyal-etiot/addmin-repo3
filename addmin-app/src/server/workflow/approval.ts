@@ -12,8 +12,8 @@ import { assertRole, type Role } from "../shared/authz";
 // Build Step 07: Workflow & Approval Module. Reused as-is by Step 08's
 // Lease/AMC/Compliance approvals (see schema.prisma's WorkflowDefinition
 // header) -- scope_type is a real discriminator, never "utility" hardcoded.
-const WORKFLOW_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
-const CHECKER_ROLES: Role[] = ["platform_admin", "checker"];
+export const WORKFLOW_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
+export const CHECKER_ROLES: Role[] = ["platform_admin", "checker"];
 
 type RouteEntities = {
   WorkflowDefinition: PrismaClient["workflowDefinition"];

@@ -7,7 +7,7 @@ import { markUtilityObligationAfterPayment } from "../obligation/instanceLifecyc
 
 // Build Step 07: Payment Module (Tracking Mode, P0). Bill lifecycle end
 // point -- recordPayment closes out an approved bill, partially or in full.
-const PAYMENT_AUTHORIZER_ROLES: Role[] = ["payment_authorizer"];
+export const PAYMENT_AUTHORIZER_ROLES: Role[] = ["payment_authorizer"];
 
 // Bills in any of these statuses can still receive a payment -- "overdue" is
 // not terminal, it's just "approved and now late" (see overdueJob.ts).

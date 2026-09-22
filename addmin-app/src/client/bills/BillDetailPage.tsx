@@ -10,6 +10,7 @@ import {
   recordPayment,
 } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
+import { DatePicker } from "../../shared/components/DatePicker";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
 
 const inputClass =
@@ -119,12 +120,7 @@ export function BillDetailPage() {
             </div>
             <div>
               <label className="label">New due date (optional)</label>
-              <input
-                type="date"
-                className={inputClass}
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-              />
+              <DatePicker className={inputClass} value={dueDate} onChange={setDueDate} />
             </div>
             <div className="flex gap-3">
               <Button
@@ -211,7 +207,7 @@ export function BillDetailPage() {
             </div>
             <div>
               <label className="label">Mode</label>
-              <select className={inputClass} value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)}>
+              <select className="select-field" value={paymentMode} onChange={(e) => setPaymentMode(e.target.value)}>
                 <option value="bank_transfer">Bank transfer</option>
                 <option value="cheque">Cheque</option>
                 <option value="cash">Cash</option>

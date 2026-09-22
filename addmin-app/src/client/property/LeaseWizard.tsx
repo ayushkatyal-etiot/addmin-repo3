@@ -1,7 +1,10 @@
 import { useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
-import { useQuery, listOffices, listLandlords, createLandlord, createLease } from "wasp/client/operations";
+import { useNavigate } from "react-router";
+import { useQuery, listLandlords, createLandlord, createLease } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
+import { DatePicker } from "../../shared/components/DatePicker";
+import { useSelectedOffice, NoOfficesInScope } from "../../shared/SelectedOfficeContext";
+import { PageLoading } from "../../shared/components/PageLoading";
 
 const inputClass =
   "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-800 shadow-xs focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500";
@@ -11,11 +14,8 @@ const inputClass =
 // separate pages) -- "select existing" vs "register new" toggle covers both.
 export function LeaseWizard() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const { data: offices, isLoading: officesLoading } = useQuery(listOffices);
+  const { officeId, isLoading: officesLoading, hasOffices } = useSelectedOffice();
   const { data: landlords, isLoading: landlordsLoading, refetch: refetchLandlords } = useQuery(listLandlords);
-
-  const [officeId, setOfficeId] = useState(searchParams.get("officeId") ?? "");
   const [landlordMode, setLandlordMode] = useState<"existing" | "new">("existing");
   const [landlordId, setLandlordId] = useState("");
   const [landlordName, setLandlordName] = useState("");
@@ -35,7 +35,6 @@ export function LeaseWizard() {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const effectiveOfficeId = officeId || offices?.[0]?.id || "";
   const effectiveLandlordId = landlordMode === "existing" ? landlordId || landlords?.[0]?.id || "" : "";
 
   async function onSubmit(e: React.FormEvent) {
@@ -56,7 +55,7 @@ export function LeaseWizard() {
       }
 
       await createLease({
-        office_id: effectiveOfficeId,
+        office_id: officeId,
         landlord_id: resolvedLandlordId,
         start_date: startDate,
         end_date: endDate,
@@ -67,7 +66,7 @@ export function LeaseWizard() {
         escalation_pct: escalationPct ? Number(escalationPct) : undefined,
         escalation_effective_date: escalationDate || undefined,
       });
-      navigate(`/app/property/leases?officeId=${effectiveOfficeId}`);
+      navigate("/app/property/leases");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create lease.");
     } finally {
@@ -75,10 +74,18 @@ export function LeaseWizard() {
     }
   }
 
-  if (officesLoading || landlordsLoading) return null;
+  if (officesLoading || landlordsLoading) return <PageLoading />;
+
+  if (!hasOffices) {
+    return (
+      <div className="mx-auto w-full max-w-2xl p-12">
+        <NoOfficesInScope />
+      </div>
+    );
+  }
 
   const canSubmit =
-    effectiveOfficeId &&
+    officeId &&
     startDate &&
     endDate &&
     rentAmount &&
@@ -87,19 +94,9 @@ export function LeaseWizard() {
   return (
     <div className="mx-auto w-full max-w-2xl p-12">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Add lease</h1>
+      <p className="mb-4 text-sm text-neutral-500">Lease will be created for the office selected in the top bar.</p>
 
       <form onSubmit={onSubmit} className="card flex flex-col gap-6 p-8">
-        <div>
-          <label className="label">Office</label>
-          <select className={inputClass} value={effectiveOfficeId} onChange={(e) => setOfficeId(e.target.value)}>
-            {(offices ?? []).map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
         <div>
           <label className="label">Landlord</label>
           <div className="mb-2 flex gap-4 text-sm">
@@ -119,7 +116,7 @@ export function LeaseWizard() {
           </div>
 
           {landlordMode === "existing" ? (
-            <select className={inputClass} value={effectiveLandlordId} onChange={(e) => setLandlordId(e.target.value)}>
+            <select className="select-field" value={effectiveLandlordId} onChange={(e) => setLandlordId(e.target.value)}>
               {(landlords ?? []).map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.name}
@@ -160,12 +157,10 @@ export function LeaseWizard() {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="label">Lease start date</label>
-            <input
-              type="date"
+            <DatePicker
               className={inputClass}
               value={startDate}
-              onChange={(e) => {
-                const next = e.target.value;
+              onChange={(next) => {
                 setStartDate(next);
                 if (!rentDueAnchorDate || rentDueAnchorDate === startDate) {
                   setRentDueAnchorDate(next);
@@ -176,7 +171,7 @@ export function LeaseWizard() {
           </div>
           <div>
             <label className="label">Lease end date</label>
-            <input type="date" className={inputClass} value={endDate} onChange={(e) => setEndDate(e.target.value)} required />
+            <DatePicker className={inputClass} value={endDate} onChange={setEndDate} required />
           </div>
         </div>
 
@@ -185,13 +180,12 @@ export function LeaseWizard() {
           <p className="mb-2 text-xs text-neutral-500">
             Monthly rent/CAM obligation periods are calculated from this day (defaults to lease start).
           </p>
-          <input
-            type="date"
+          <DatePicker
             className={inputClass}
             value={rentDueAnchorDate || startDate}
             min={startDate || undefined}
             max={endDate || undefined}
-            onChange={(e) => setRentDueAnchorDate(e.target.value)}
+            onChange={setRentDueAnchorDate}
             required
           />
         </div>
@@ -249,13 +243,7 @@ export function LeaseWizard() {
           {escalationPct && (
             <div>
               <label className="label">Escalation effective date</label>
-              <input
-                type="date"
-                className={inputClass}
-                value={escalationDate}
-                onChange={(e) => setEscalationDate(e.target.value)}
-                required
-              />
+              <DatePicker className={inputClass} value={escalationDate} onChange={setEscalationDate} required />
             </div>
           )}
         </div>

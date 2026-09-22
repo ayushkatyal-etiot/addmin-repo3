@@ -1,19 +1,21 @@
 import { HttpError } from "wasp/server";
 import type {
   CreateVendor,
+  BulkImportVendors,
   ListVendors,
   GetVendor,
   ActivateVendor,
   RecordVendorPerformanceReview,
 } from "wasp/server/operations";
-import { assertRole, type Role } from "../shared/authz";
+import { assertRole, userFromSession, type Role } from "../shared/authz";
+import { parseCsv } from "../shared/csv";
 
 // Build Step 08 (planmysaas-blueprint/08-build-playbook.md): Vendor Module,
 // F-14. Vendor is org-wide, not office-scoped (schema.prisma has no
 // office_id on Vendor) -- the same vendor (e.g. a citywide DG servicing
 // company) can be assigned across multiple offices' AMC contracts.
-const VENDOR_ADMIN_ROLES: Role[] = ["platform_admin", "vendor_manager"];
-const VENDOR_READ_ROLES: Role[] = [...VENDOR_ADMIN_ROLES, "office_admin", "facility_staff"];
+export const VENDOR_ADMIN_ROLES: Role[] = ["platform_admin", "vendor_manager"];
+export const VENDOR_READ_ROLES: Role[] = [...VENDOR_ADMIN_ROLES, "office_admin", "facility_staff"];
 
 type CreateVendorInput = {
   name: string;
@@ -24,7 +26,8 @@ type CreateVendorInput = {
 // F-14: "Vendor status starts as Pending Activation until documents are
 // validated" -- never created directly as active.
 export const createVendor: CreateVendor<CreateVendorInput, { id: string }> = async (input, context) => {
-  const user = await assertRole(context.user, VENDOR_ADMIN_ROLES, context.entities, "createVendor");
+  const sessionUser = await userFromSession(context.user, context.entities);
+  const user = await assertRole(sessionUser, VENDOR_ADMIN_ROLES, context.entities, "createVendor");
   if (!user.org_id) throw new HttpError(400, "You must belong to an organization first.");
   if (!input.name.trim()) throw new HttpError(400, "Vendor name is required.");
 
@@ -52,12 +55,55 @@ export const createVendor: CreateVendor<CreateVendorInput, { id: string }> = asy
   return { id: vendor.id };
 };
 
+type BulkImportRowResult = { row: number; success: boolean; vendorId?: string; error?: string };
+
+// CSV header: name,category,pan_gstin (pan_gstin optional). Rows are
+// independent -- one bad row doesn't fail the batch, same as
+// bulkImportOffices/bulkImportAssets. Reuses createVendor per row rather
+// than duplicating its validation/status/audit-log logic.
+export const bulkImportVendors: BulkImportVendors<
+  { csv: string },
+  { results: BulkImportRowResult[] }
+> = async ({ csv }, context) => {
+  await assertRole(context.user, VENDOR_ADMIN_ROLES, context.entities, "bulkImportVendors");
+
+  const rows = parseCsv(csv);
+  if (rows.length === 0) {
+    throw new HttpError(400, "CSV has no data rows.");
+  }
+
+  const results: BulkImportRowResult[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rowNumber = i + 2; // header is row 1
+    try {
+      if (!row.category?.trim()) throw new HttpError(400, "category is required.");
+      const vendor = await createVendor(
+        { name: row.name ?? "", category: row.category.trim(), pan_gstin: row.pan_gstin?.trim() || undefined },
+        context,
+      );
+      results.push({ row: rowNumber, success: true, vendorId: vendor.id });
+    } catch (err) {
+      results.push({
+        row: rowNumber,
+        success: false,
+        error: err instanceof HttpError ? err.message : "Unexpected error.",
+      });
+    }
+  }
+
+  return { results };
+};
+
 export const listVendors: ListVendors<
   void,
   Array<{ id: string; name: string; category: string; pan_gstin: string | null; status: string }>
 > = async (_args, context) => {
-  const user = await assertRole(context.user, VENDOR_READ_ROLES, context.entities, "listVendors");
-  if (!user.org_id) return [];
+  const sessionUser = await userFromSession(context.user, context.entities);
+  const user = await assertRole(sessionUser, VENDOR_READ_ROLES, context.entities, "listVendors");
+  if (!user.org_id) {
+    throw new HttpError(400, "You must belong to an organization first.");
+  }
 
   const vendors = await context.entities.Vendor.findMany({
     where: { org_id: user.org_id },
@@ -99,7 +145,8 @@ export const getVendor: GetVendor<
     }>;
   }
 > = async ({ id }, context) => {
-  const user = await assertRole(context.user, VENDOR_READ_ROLES, context.entities, "getVendor");
+  const sessionUser = await userFromSession(context.user, context.entities);
+  const user = await assertRole(sessionUser, VENDOR_READ_ROLES, context.entities, "getVendor");
 
   const vendor = await context.entities.Vendor.findUnique({
     where: { id },
@@ -141,7 +188,8 @@ export const getVendor: GetVendor<
 // assignment" -- the only transition out of pending_activation this step
 // wires up (suspend/reactivate isn't in this pass's scope).
 export const activateVendor: ActivateVendor<{ id: string }, { success: true }> = async ({ id }, context) => {
-  const user = await assertRole(context.user, VENDOR_ADMIN_ROLES, context.entities, "activateVendor");
+  const sessionUser = await userFromSession(context.user, context.entities);
+  const user = await assertRole(sessionUser, VENDOR_ADMIN_ROLES, context.entities, "activateVendor");
 
   const vendor = await context.entities.Vendor.findUnique({ where: { id } });
   if (!vendor || vendor.org_id !== user.org_id) {
@@ -178,7 +226,8 @@ export const recordVendorPerformanceReview: RecordVendorPerformanceReview<
   RecordVendorPerformanceReviewInput,
   { id: string }
 > = async (input, context) => {
-  const user = await assertRole(context.user, VENDOR_ADMIN_ROLES, context.entities, "recordVendorPerformanceReview");
+  const sessionUser = await userFromSession(context.user, context.entities);
+  const user = await assertRole(sessionUser, VENDOR_ADMIN_ROLES, context.entities, "recordVendorPerformanceReview");
   if (!user.org_id) throw new HttpError(400, "You must belong to an organization first.");
 
   const vendor = await context.entities.Vendor.findUnique({ where: { id: input.vendorId } });

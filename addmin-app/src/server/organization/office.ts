@@ -5,12 +5,14 @@ import type {
   BulkImportOffices,
   ListOffices,
   GetOffice,
+  UpdateOffice,
   ListOrgUsers,
   UpdateUserOffice,
+  UpdateUserManager,
 } from "wasp/server/operations";
 import type { PrismaClient } from "@prisma/client";
-import { assertRole, ALL_ROLES, type Role } from "../shared/authz";
-import { CHECKLIST_TEMPLATE } from "../onboarding/checklistTemplates";
+import { assertRole, assertOfficeScope, ALL_ROLES, type Role } from "../shared/authz";
+import { parseCsv } from "../shared/csv";
 
 // Build Step 04 (planmysaas-blueprint/08-build-playbook.md): Organization &
 // Office module. F-03's "createOrganization" action from 04-architecture.md's
@@ -20,7 +22,7 @@ import { CHECKLIST_TEMPLATE } from "../onboarding/checklistTemplates";
 // the real profile. Named to match 04-architecture.md's table anyway would
 // be misleading, hence UpdateOrganizationProfile.
 
-const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
+export const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
 
 type OrgProfileInput = {
   name: string;
@@ -64,8 +66,14 @@ type CreateOfficeInput = {
 
 /**
  * Shared by both createOffice (single) and bulkImportOffices (CSV, one call
- * per row) -- the create-office-and-seed-its-checklist logic must not fork
- * into two implementations that drift, per Build Step 04's mandatory pattern.
+ * per row) -- must not fork into two implementations that drift.
+ *
+ * Onboarding-checklist hidden (product decision, see
+ * planmysaas-blueprint/11-without-setup-decision.md, "Option A"): a new
+ * office is immediately usable -- no guided wizard, no activation gate, no
+ * OfficeChecklistItem rows seeded. `OfficeSetupProfile` is still created
+ * (Office Home's completionPct read and the FK both still expect a row) but
+ * fixed at 100% since there's no checklist left to track against it.
  */
 async function createOfficeForOrg(
   orgId: string,
@@ -73,7 +81,6 @@ async function createOfficeForOrg(
   entities: {
     Office: PrismaClient["office"];
     OfficeSetupProfile: PrismaClient["officeSetupProfile"];
-    OfficeChecklistItem: PrismaClient["officeChecklistItem"];
   },
 ): Promise<{ officeId: string; code: string }> {
   if (!input.name.trim()) throw new HttpError(400, "Office name is required.");
@@ -96,32 +103,16 @@ async function createOfficeForOrg(
       address: input.address.trim(),
       office_type: input.office_type as never,
       ownership_type: input.ownership_type as never,
-      setup_status: "draft",
+      setup_status: "active",
     },
   });
 
-  const setupProfile = await entities.OfficeSetupProfile.create({
+  await entities.OfficeSetupProfile.create({
     data: {
       org_id: orgId,
       office_id: office.id,
-      completion_pct: 0,
+      completion_pct: 100,
     },
-  });
-
-  // Every new office gets the full template, un-reviewed -- see
-  // src/server/onboarding/checklist.ts's file header for what
-  // (applicability: "no", status: "pending") means as the "not yet visited
-  // by the admin" sentinel state.
-  await entities.OfficeChecklistItem.createMany({
-    data: CHECKLIST_TEMPLATE.map((item) => ({
-      org_id: orgId,
-      office_id: office.id,
-      office_setup_profile_id: setupProfile.id,
-      template_item_code: item.code,
-      category: item.category,
-      applicability: "no" as const,
-      status: "pending" as const,
-    })),
   });
 
   return { officeId: office.id, code };
@@ -217,33 +208,19 @@ export const bulkImportOffices: BulkImportOffices<
   return { results };
 };
 
-function parseCsv(csv: string): Record<string, string>[] {
-  const lines = csv
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-  if (lines.length < 1) return [];
-
-  const header = lines[0].split(",").map((h) => h.trim().toLowerCase());
-  return lines.slice(1).map((line) => {
-    const cells = line.split(",").map((c) => c.trim());
-    const row: Record<string, string> = {};
-    header.forEach((key, idx) => {
-      row[key] = cells[idx] ?? "";
-    });
-    return row;
-  });
-}
-
 // Roles that pick an office on /app/bills, /app/payments, etc. — not only
 // office admins (Build Step 07: Checker / Payment Authorizer need read access
 // to offices in their office_scope).
-const OFFICE_LIST_ROLES: Role[] = [
+export const OFFICE_LIST_ROLES: Role[] = [
   ...OFFICE_ADMIN_ROLES,
   "office_head",
   "vendor_manager",
   "checker",
   "payment_authorizer",
+  // F-15: "Employee or Facility Staff logs a maintenance request" -- both
+  // need their office(s) to file one against.
+  "facility_staff",
+  "employee",
 ];
 
 export const listOffices: ListOffices<
@@ -320,19 +297,73 @@ export const getOffice: GetOffice<
   };
 };
 
+type UpdateOfficeInput = {
+  officeId: string;
+  name: string;
+  address: string;
+  office_type: string;
+  ownership_type: string;
+};
+
+export const updateOffice: UpdateOffice<UpdateOfficeInput, { officeId: string }> = async (input, context) => {
+  const user = await assertRole(context.user, OFFICE_ADMIN_ROLES, context.entities, "updateOffice");
+  await assertOfficeScope(user, input.officeId, context.entities, "updateOffice");
+  if (!user.org_id) throw new HttpError(400, "You must belong to an organization first.");
+  if (!input.name.trim()) throw new HttpError(400, "Office name is required.");
+  if (!input.address.trim()) throw new HttpError(400, "Office address is required.");
+
+  const office = await context.entities.Office.findUnique({ where: { id: input.officeId } });
+  if (!office || office.org_id !== user.org_id) {
+    throw new HttpError(404, "Office not found.");
+  }
+
+  await context.entities.Office.update({
+    where: { id: input.officeId },
+    data: {
+      name: input.name.trim(),
+      address: input.address.trim(),
+      office_type: input.office_type as never,
+      ownership_type: input.ownership_type as never,
+    },
+  });
+
+  await context.entities.AuditLog.create({
+    data: {
+      org_id: user.org_id,
+      actor_user_id: user.id,
+      entity_type: "Office",
+      entity_id: input.officeId,
+      action: "updated",
+      after_value: {
+        name: input.name.trim(),
+        office_type: input.office_type,
+        ownership_type: input.ownership_type,
+      },
+    },
+  });
+
+  return { officeId: input.officeId };
+};
+
 // Used by the onboarding wizard's "assign owner" pickers (F-04's Roles step)
 // -- listing every user in the caller's org, not office-scoped, since a role
 // owner can be assigned before their own office_scope is configured.
 export const listOrgUsers: ListOrgUsers<
   void,
-  Array<{ id: string; email: string | null; role: string | null; office_scope: Record<string, string[]> | null }>
+  Array<{
+    id: string;
+    email: string | null;
+    role: string | null;
+    office_scope: Record<string, string[]> | null;
+    manager_user_id: string | null;
+  }>
 > = async (_args, context) => {
   const user = await assertRole(context.user, OFFICE_ADMIN_ROLES, context.entities, "listOrgUsers");
   if (!user.org_id) return [];
 
   const users = await context.entities.User.findMany({
     where: { org_id: user.org_id },
-    select: { id: true, email: true, role: true, office_scope: true },
+    select: { id: true, email: true, role: true, office_scope: true, manager_user_id: true },
     orderBy: { email: "asc" },
   });
   return users as unknown as Array<{
@@ -340,6 +371,7 @@ export const listOrgUsers: ListOrgUsers<
     email: string | null;
     role: string | null;
     office_scope: Record<string, string[]> | null;
+    manager_user_id: string | null;
   }>;
 };
 
@@ -388,4 +420,35 @@ export const updateUserOffice: UpdateUserOffice<{ userId: string; officeRoles: R
     where: { id: userId },
     data: { office_scope: Object.fromEntries(officeEntries.map(([id, role]) => [id, [role]])) },
   });
+};
+
+// F-16: sets who approves a User's asset requests (createAssetRequest,
+// src/server/asset/asset.ts) -- a self-relation, not a role, since two
+// people can share a role but not a manager. Pass managerUserId: null to
+// clear it.
+export const updateUserManager: UpdateUserManager<{ userId: string; managerUserId: string | null }, void> = async (
+  { userId, managerUserId },
+  context,
+) => {
+  const admin = await assertRole(context.user, ["platform_admin", "office_admin"], context.entities, "updateUserManager");
+  if (!admin.org_id) {
+    throw new HttpError(400, "You must belong to an organization to do this.");
+  }
+
+  const targetUser = await context.entities.User.findFirst({ where: { id: userId, org_id: admin.org_id } });
+  if (!targetUser) {
+    throw new HttpError(404, "User not found.");
+  }
+
+  if (managerUserId) {
+    if (managerUserId === userId) {
+      throw new HttpError(400, "A user cannot be their own manager.");
+    }
+    const manager = await context.entities.User.findFirst({ where: { id: managerUserId, org_id: admin.org_id } });
+    if (!manager) {
+      throw new HttpError(404, "Manager not found in this organization.");
+    }
+  }
+
+  await context.entities.User.update({ where: { id: userId }, data: { manager_user_id: managerUserId } });
 };

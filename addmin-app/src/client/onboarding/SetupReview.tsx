@@ -12,10 +12,13 @@ export function SetupReview({
   officeId,
   onActivated,
   onJumpToCategory,
+  allowEditAfterActive,
 }: {
   officeId: string;
   onActivated?: () => void;
   onJumpToCategory?: (category: string) => void;
+  /** When true, active offices still show checklist edit actions (office setup page). */
+  allowEditAfterActive?: boolean;
 }) {
   const navigate = useNavigate();
   const { data, isLoading, refetch } = useQuery(getOfficeChecklist, { officeId });
@@ -44,30 +47,47 @@ export function SetupReview({
   }
 
   if (isLoading || !data) {
-    return <div className="card h-48 animate-pulse p-8" />;
+    return <div className="auth-panel h-48 animate-pulse" />;
   }
 
   const alreadyActive = data.setupStatus === "active";
   const unreviewedCount = data.items.filter((i) => !i.reviewed).length;
 
   return (
-    <div className="card flex flex-col gap-6 p-8">
-      <div className="flex items-center gap-6">
+    <div className="auth-panel flex flex-col gap-6">
+      <div className="flex flex-wrap items-center gap-6">
         <div
-          className="flex h-24 w-24 shrink-0 items-center justify-center rounded-full border-8 border-primary-500 text-xl font-bold text-primary-700"
-          style={{ borderColor: `oklch(0.532 0.125 156.421 / ${Math.max(data.completionPct, 10)}%)` }}
+          className="flex h-24 w-24 shrink-0 items-center justify-center rounded-full"
+          style={{ background: `conic-gradient(#0b814d ${data.completionPct}%, #dfe3e5 0)` }}
         >
-          {data.completionPct}%
+          <div className="flex h-18.5 w-18.5 items-center justify-center rounded-full bg-white text-xl font-bold text-primary-700">
+            {data.completionPct}%
+          </div>
         </div>
         <div>
           <h2 className="text-lg font-semibold text-neutral-900">{data.officeName}</h2>
           <p className="text-sm text-neutral-500">
-            {alreadyActive ? "This office is active." : "Setup Completion"}
+            {alreadyActive
+              ? allowEditAfterActive
+                ? "Active — you can still update checklist answers below."
+                : "This office is active."
+              : "Setup completion"}
           </p>
           {unreviewedCount > 0 && !alreadyActive && (
-            <p className="text-sm text-amber-600">{unreviewedCount} item(s) not yet reviewed.</p>
+            <p className="mt-1 flex items-center gap-2 text-sm text-amber-600">
+              <AlertTriangleIcon /> {unreviewedCount} item(s) not yet reviewed.
+            </p>
           )}
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-neutral-900">Setup checklist by category</h3>
+        {onJumpToCategory && (
+          <Button type="button" variant="secondary" className="text-xs" onClick={() => onJumpToCategory("utility")}>
+            Edit checklist
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -75,11 +95,15 @@ export function SetupReview({
           <button
             key={category}
             type="button"
+            disabled={!onJumpToCategory}
             onClick={() => onJumpToCategory?.(category)}
-            className="flex flex-col rounded-md border border-neutral-200 p-3 text-left hover:bg-neutral-50"
+            className="flex flex-col gap-1 rounded-md border border-neutral-100 bg-white p-4 text-left transition-colors hover:border-primary-200 hover:bg-neutral-50 disabled:cursor-default disabled:opacity-60"
           >
-            <span className="text-sm font-medium text-neutral-800">{CHECKLIST_CATEGORY_TITLES[category]}</span>
-            <span className="text-lg font-semibold text-primary-700">{data.completionByCategory[category]}%</span>
+            <span className="text-sm font-medium text-neutral-600">{CHECKLIST_CATEGORY_TITLES[category]}</span>
+            <span className="text-lg font-bold text-primary-700">{data.completionByCategory[category]}%</span>
+            {onJumpToCategory && (
+              <span className="mt-1 text-xs font-medium text-primary-600">Edit checklist →</span>
+            )}
           </button>
         ))}
       </div>
@@ -98,12 +122,26 @@ export function SetupReview({
       {activationError && <p className="text-sm text-red-600">{activationError}</p>}
 
       {alreadyActive ? (
-        <p className="text-sm font-medium text-primary-700">✔ Activated</p>
+        allowEditAfterActive ? (
+          <p className="text-sm font-medium text-primary-700">✔ Office is active</p>
+        ) : (
+          <p className="text-sm font-medium text-primary-700">✔ Activated</p>
+        )
       ) : (
-        <Button onClick={onActivate} disabled={activating}>
-          {activating ? "Activating…" : "Activate Office"}
+        <Button onClick={onActivate} disabled={activating} className="w-full">
+          {activating ? "Activating…" : "Activate office"}
         </Button>
       )}
     </div>
+  );
+}
+
+function AlertTriangleIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
   );
 }

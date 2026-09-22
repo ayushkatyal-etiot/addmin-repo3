@@ -12,7 +12,7 @@ import { markRentCamObligationReceived } from "../obligation/instanceLifecycle";
 // never accepted from the client, unlike the utility flow's optional
 // client-supplied tds_amount, since a rent payment's TDS is a statutory
 // calculation, not a maker's estimate.
-const PAYMENT_AUTHORIZER_ROLES: Role[] = ["payment_authorizer"];
+export const PAYMENT_AUTHORIZER_ROLES: Role[] = ["payment_authorizer"];
 
 // Pure so tests/lease.test.ts can exercise the rounding/blocking rules
 // without a live DB, matching tests/authz.test.ts's unit-level style. Rate

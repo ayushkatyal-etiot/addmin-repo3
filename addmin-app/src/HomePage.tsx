@@ -1,13 +1,16 @@
 import { Navigate } from "react-router";
 import { useAuth } from "wasp/client/auth";
-import { useQuery, getMfaStatus, getSubscription } from "wasp/client/operations";
+import { useQuery, getMfaStatus, getSubscription, listOffices } from "wasp/client/operations";
 
 export function HomePage() {
   const { data: user } = useAuth();
   const { data: mfaStatus, isLoading: mfaStatusLoading } = useQuery(getMfaStatus);
   const { data: subscription, isLoading: subscriptionLoading } = useQuery(getSubscription);
+  const { data: offices, isLoading: officesLoading } = useQuery(listOffices, undefined, {
+    enabled: !!user,
+  });
 
-  if (mfaStatusLoading || subscriptionLoading) return null;
+  if (mfaStatusLoading || subscriptionLoading || officesLoading) return null;
 
   // Every operation on the server is already blocked until these pass
   // (src/server/shared/authz.ts) -- these redirects are just so the user
@@ -25,5 +28,9 @@ export function HomePage() {
     return <Navigate to="/app/subscribe" replace />;
   }
 
-  return <Navigate to="/app/onboarding" replace />;
+  const officeList = offices ?? [];
+  if (officeList.length === 0) {
+    return <Navigate to="/app/offices/new" replace />;
+  }
+  return <Navigate to="/app/dashboard" replace />;
 }

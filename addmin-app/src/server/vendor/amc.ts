@@ -2,6 +2,8 @@ import { HttpError } from "wasp/server";
 import type { CreateAmcContract, ListAmcContracts, CloseAmcContract } from "wasp/server/operations";
 import { assertRole, type Role } from "../shared/authz";
 import { createObligationSchedule, deactivateObligationSchedule } from "../obligation/schedule";
+import { ensureAmcRenewalObligation } from "./amcObligation";
+import { userFromSession } from "../shared/authz";
 
 // Build Step 08 (planmysaas-blueprint/08-build-playbook.md): F-14's AMC
 // tracking half. Reuses Step 06's obligation engine exactly like Lease did
@@ -9,7 +11,7 @@ import { createObligationSchedule, deactivateObligationSchedule } from "../oblig
 // RecurringObligationSchedule with scope_type "amc", not a bespoke
 // reimplementation. Renewal *alerts* (60/30 day) and the active ->
 // due_for_renewal -> expired status walk live in amcJob.ts, not here.
-const VENDOR_ADMIN_ROLES: Role[] = ["platform_admin", "vendor_manager"];
+export const VENDOR_ADMIN_ROLES: Role[] = ["platform_admin", "vendor_manager"];
 
 // AMCContract.linked_entity_type/linked_entity_id (schema.prisma) is
 // deliberately a polymorphic string pair, not a typed FK -- Asset isn't
@@ -36,7 +38,8 @@ export const createAmcContract: CreateAmcContract<CreateAmcContractInput, { id: 
   input,
   context,
 ) => {
-  const user = await assertRole(context.user, VENDOR_ADMIN_ROLES, context.entities, "createAmcContract");
+  const sessionUser = await userFromSession(context.user, context.entities);
+  const user = await assertRole(sessionUser, VENDOR_ADMIN_ROLES, context.entities, "createAmcContract");
   if (!user.org_id) throw new HttpError(400, "You must belong to an organization first.");
 
   const vendor = await context.entities.Vendor.findUnique({ where: { id: input.vendor_id } });
@@ -90,10 +93,12 @@ export const createAmcContract: CreateAmcContract<CreateAmcContractInput, { id: 
     scope_ref_id: contract.id,
     frequency: "annual",
     expected_window_days: EXPECTED_WINDOW_DAYS,
-    due_rule: "AMC renewal due.",
+    due_rule: "AMC renewal due by contract end date.",
     owner_user_id: user.id,
     active_from: startDate,
   });
+
+  await ensureAmcRenewalObligation(context.entities, contract.id);
 
   await context.entities.AuditLog.create({
     data: {
@@ -118,28 +123,69 @@ export const listAmcContracts: ListAmcContracts<
     start_date: string;
     end_date: string;
     status: string;
+    schedule: {
+      frequency: string;
+      expected_window_days: number;
+      active_from: string;
+    } | null;
+    obligation_instances: Array<{
+      id: string;
+      period: string;
+      expected_date: string;
+      status: string;
+    }>;
   }>
 > = async ({ vendorId }, context) => {
+  const sessionUser = await userFromSession(context.user, context.entities);
   const user = await assertRole(
-    context.user,
+    sessionUser,
     ["platform_admin", "vendor_manager", "office_admin", "facility_staff"],
     context.entities,
     "listAmcContracts",
   );
+  if (!user.org_id) throw new HttpError(400, "You must belong to an organization first.");
 
   const contracts = await context.entities.AMCContract.findMany({
-    where: { vendor_id: vendorId, org_id: user.org_id! },
+    where: { vendor_id: vendorId, org_id: user.org_id },
     orderBy: { start_date: "desc" },
   });
 
-  return contracts.map((c) => ({
-    id: c.id,
-    linked_entity_type: c.linked_entity_type,
-    linked_entity_id: c.linked_entity_id,
-    start_date: c.start_date.toISOString(),
-    end_date: c.end_date.toISOString(),
-    status: c.status,
-  }));
+  return Promise.all(
+    contracts.map(async (c) => {
+      await ensureAmcRenewalObligation(context.entities, c.id);
+      const schedule = await context.entities.RecurringObligationSchedule.findFirst({
+        where: { scope_type: "amc", scope_ref_id: c.id },
+      });
+      const instances = schedule
+        ? await context.entities.ObligationInstance.findMany({
+            where: { schedule_id: schedule.id },
+            orderBy: { expected_date: "desc" },
+          })
+        : [];
+
+      return {
+        id: c.id,
+        linked_entity_type: c.linked_entity_type,
+        linked_entity_id: c.linked_entity_id,
+        start_date: c.start_date.toISOString(),
+        end_date: c.end_date.toISOString(),
+        status: c.status,
+        schedule: schedule
+          ? {
+              frequency: schedule.frequency,
+              expected_window_days: schedule.expected_window_days,
+              active_from: schedule.active_from.toISOString(),
+            }
+          : null,
+        obligation_instances: instances.map((i) => ({
+          id: i.id,
+          period: i.period,
+          expected_date: i.expected_date.toISOString(),
+          status: i.status,
+        })),
+      };
+    }),
+  );
 };
 
 // F-14 edge case parity with Lease termination: closing an AMC stops future

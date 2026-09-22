@@ -1,4 +1,10 @@
 import { app, api, action, job, page, query, route } from "@wasp.sh/spec";
+import {
+  configureFileUploadMiddleware,
+  configureUploadDownloadMiddleware,
+  downloadUploadedFile,
+  uploadDocumentFile,
+} from "./src/server/upload/fileUpload" with { type: "ref" };
 import { App } from "./src/App" with { type: "ref" };
 import { EmailVerificationPage } from "./src/auth/email/EmailVerificationPage" with { type: "ref" };
 import { LoginPage } from "./src/auth/email/LoginPage" with { type: "ref" };
@@ -10,9 +16,13 @@ import { MfaSetupPage } from "./src/auth/mfa/MfaSetupPage" with { type: "ref" };
 import { MfaVerifyPage } from "./src/auth/mfa/MfaVerifyPage" with { type: "ref" };
 import { PlatformSigninPage } from "./src/platform/PlatformSigninPage" with { type: "ref" };
 import { HomePage } from "./src/HomePage" with { type: "ref" };
-import { seedDevData, runObligationJobs } from "./src/server/seed" with { type: "ref" };
+import { DashboardPage } from "./src/client/dashboard/DashboardPage" with { type: "ref" };
+import { getOfficeHome } from "./src/server/reporting/officeHome" with { type: "ref" };
+import { seedDevData, runObligationJobs, runNotificationJobs } from "./src/server/seed" with { type: "ref" };
+import { setupSentry } from "./src/server/monitoring/sentry" with { type: "ref" };
 import {
   getMfaStatus,
+  getMyUserContext,
   enrollMfa,
   confirmMfaEnrollment,
   verifyMfaLogin,
@@ -30,12 +40,13 @@ import {
   bulkImportOffices,
   listOffices,
   getOffice,
+  updateOffice,
   listOrgUsers,
   updateUserOffice,
+  updateUserManager,
 } from "./src/server/organization/office" with { type: "ref" };
 import { getOfficeChecklist, updateChecklistItem } from "./src/server/onboarding/checklist" with { type: "ref" };
 import { activateOffice } from "./src/server/onboarding/activation" with { type: "ref" };
-import { OnboardingPage } from "./src/client/onboarding/OnboardingPage" with { type: "ref" };
 import { OfficeListPage } from "./src/client/offices/OfficeListPage" with { type: "ref" };
 import { NewOfficePage } from "./src/client/offices/NewOfficePage" with { type: "ref" };
 import { OfficeSetupPage } from "./src/client/offices/OfficeSetupPage" with { type: "ref" };
@@ -55,6 +66,7 @@ import { OrgListPage } from "./src/platform/OrgListPage" with { type: "ref" };
 import { OrgDetailPage } from "./src/platform/OrgDetailPage" with { type: "ref" };
 import {
   createUtilityAccount,
+  bulkImportUtilityAccounts,
   listUtilityAccounts,
   getUtilityAccount,
   deactivateUtilityAccount,
@@ -88,6 +100,15 @@ import { ApprovalQueuePage } from "./src/client/approvals/ApprovalQueuePage" wit
 import { PaymentsPage } from "./src/client/payments/PaymentsPage" with { type: "ref" };
 import { WorkflowAdminPage } from "./src/client/workflow/WorkflowAdminPage" with { type: "ref" };
 import { UsersPage } from "./src/client/admin/UsersPage" with { type: "ref" };
+import { NotificationRules } from "./src/client/admin/NotificationRules" with { type: "ref" };
+import {
+  listNotificationLogs,
+  listNotificationRules,
+  upsertNotificationRule,
+} from "./src/server/admin/notificationRules" with { type: "ref" };
+import { listMyNotifications } from "./src/server/notification/inbox" with { type: "ref" };
+import { AuditLogSearch } from "./src/client/admin/AuditLogSearch" with { type: "ref" };
+import { searchAuditLogs } from "./src/server/admin/auditLogSearch" with { type: "ref" };
 import { createLandlord, listLandlords } from "./src/server/property/landlord" with { type: "ref" };
 import {
   createLease,
@@ -102,6 +123,7 @@ import { LeaseWizard } from "./src/client/property/LeaseWizard" with { type: "re
 import { LeaseDetailPage } from "./src/client/property/LeaseDetailPage" with { type: "ref" };
 import {
   createVendor,
+  bulkImportVendors,
   listVendors,
   getVendor,
   activateVendor,
@@ -111,6 +133,48 @@ import { createAmcContract, listAmcContracts, closeAmcContract } from "./src/ser
 import { amcRenewalJob } from "./src/server/vendor/amcJob" with { type: "ref" };
 import { VendorListPage } from "./src/client/vendors/VendorListPage" with { type: "ref" };
 import { VendorDetailPage } from "./src/client/vendors/VendorDetailPage" with { type: "ref" };
+import {
+  createMaintenanceRequest,
+  listMaintenanceRequests,
+  getMaintenanceRequest,
+  createWorkOrder,
+  updateWorkOrderStatus,
+  uploadWorkOrderEvidence,
+  verifyWorkOrder,
+} from "./src/server/facility/maintenance" with { type: "ref" };
+import { slaBreachEscalationJob } from "./src/server/facility/slaJob" with { type: "ref" };
+import { MaintenanceListPage } from "./src/client/maintenance/MaintenanceListPage" with { type: "ref" };
+import { MaintenanceDetailPage } from "./src/client/maintenance/MaintenanceDetailPage" with { type: "ref" };
+import {
+  createAsset,
+  bulkImportAssets,
+  listAssets,
+  getAsset,
+  setAssetStatus,
+  createAssetRequest,
+  listMyAssetRequests,
+  listPendingManagerApprovals,
+  listAssetRequestsForOffice,
+  getAssetRequest,
+  decideAssetRequestAsManager,
+  allocateAssetRequest,
+  markAssetRequestProcurementPending,
+} from "./src/server/asset/asset" with { type: "ref" };
+import { assetWarrantyReminderJob } from "./src/server/asset/warrantyJob" with { type: "ref" };
+import { AssetListPage } from "./src/client/assets/AssetListPage" with { type: "ref" };
+import { AssetRequestsPage } from "./src/client/assets/AssetRequestsPage" with { type: "ref" };
+import {
+  listComplianceItems,
+  getComplianceItem,
+  setComplianceApplicability,
+  uploadComplianceDocument,
+} from "./src/server/compliance/compliance" with { type: "ref" };
+import { complianceExpiryJob } from "./src/server/compliance/complianceJob" with { type: "ref" };
+import { ComplianceListPage } from "./src/client/compliance/ComplianceListPage" with { type: "ref" };
+import { listMyActions } from "./src/server/reporting/myActions" with { type: "ref" };
+import { getExecutiveDashboard } from "./src/server/reporting/executive" with { type: "ref" };
+import { MyActionsPage } from "./src/client/reporting/MyActionsPage" with { type: "ref" };
+import { ExecutiveDashboardPage } from "./src/client/reporting/ExecutiveDashboardPage" with { type: "ref" };
 
 // Build Step 01/02/03/04/05/06/07 (planmysaas-blueprint/08-build-playbook.md):
 // repo bootstrap, data layer, auth/RBAC/Platform Operator identity,
@@ -125,7 +189,10 @@ export default app({
   title: "AddMin",
   head: ["<link rel='icon' href='/favicon.ico' />"],
   db: {
-    seeds: [seedDevData, runObligationJobs],
+    seeds: [seedDevData, runObligationJobs, runNotificationJobs],
+  },
+  server: {
+    setupFn: setupSentry,
   },
   auth: {
     userEntity: "User",
@@ -175,9 +242,17 @@ export default app({
     route("MfaSetupRoute", "/mfa-setup", page(MfaSetupPage, { authRequired: true })),
     route("MfaVerifyRoute", "/mfa-verify", page(MfaVerifyPage, { authRequired: true })),
     route("AdminUsersRoute", "/admin/users", page(UsersPage, { authRequired: true })),
+    route("AdminNotificationsRoute", "/admin/notifications", page(NotificationRules, { authRequired: true })),
+    query(listNotificationRules, { entities: ["NotificationRule", "AuditLog"] }),
+    query(listNotificationLogs, { entities: ["NotificationLog", "AuditLog"] }),
+    query(listMyNotifications, { entities: ["NotificationLog", "User", "AuditLog"] }),
+    action(upsertNotificationRule, { entities: ["NotificationRule", "AuditLog"] }),
+    route("AdminAuditLogsRoute", "/admin/audit-logs", page(AuditLogSearch, { authRequired: true })),
+    query(searchAuditLogs, { entities: ["AuditLog", "User"] }),
 
     // Identity & Access Module (04-architecture.md) -- MFA + invites.
     query(getMfaStatus, { entities: ["User"] }),
+    query(getMyUserContext, { entities: ["User"] }),
     action(enrollMfa, { entities: ["User"] }),
     action(confirmMfaEnrollment, { entities: ["User"] }),
     action(verifyMfaLogin, { entities: ["User"] }),
@@ -219,19 +294,40 @@ export default app({
       middlewareConfigFn: platformCorsMiddlewareConfigFn,
     }),
 
-    // Organization & Office Module + Onboarding Module (04-architecture.md,
-    // Build Step 04) -- F-03, F-04, F-05.
-    route("OnboardingRoute", "/app/onboarding", page(OnboardingPage, { authRequired: true })),
+    // Organization & Office Module (04-architecture.md, Build Step 04) --
+    // F-03. The guided onboarding checklist (F-04/F-05) is hidden per
+    // planmysaas-blueprint/11-without-setup-decision.md ("Option A") --
+    // offices are usable immediately on creation, no wizard route exists.
+    route("DashboardRoute", "/app/dashboard", page(DashboardPage, { authRequired: true })),
+    query(getOfficeHome, {
+      entities: [
+        "User",
+        "Office",
+        "OfficeSetupProfile",
+        "RecurringObligationSchedule",
+        "ObligationInstance",
+        "UtilityAccount",
+        "UtilityBill",
+        "Lease",
+        "AMCContract",
+        "AssetRequest",
+        "MaintenanceRequest",
+        "ComplianceItem",
+        "AuditLog",
+      ],
+    }),
     route("OfficesRoute", "/app/offices", page(OfficeListPage, { authRequired: true })),
     route("NewOfficeRoute", "/app/offices/new", page(NewOfficePage, { authRequired: true })),
     route("OfficeSetupRoute", "/app/offices/:officeId/setup", page(OfficeSetupPage, { authRequired: true })),
     action(updateOrganizationProfile, { entities: ["Organization", "AuditLog"] }),
-    action(createOffice, { entities: ["Office", "OfficeSetupProfile", "OfficeChecklistItem", "AuditLog"] }),
-    action(bulkImportOffices, { entities: ["Office", "OfficeSetupProfile", "OfficeChecklistItem", "AuditLog"] }),
+    action(createOffice, { entities: ["Office", "OfficeSetupProfile", "AuditLog"] }),
+    action(bulkImportOffices, { entities: ["Office", "OfficeSetupProfile", "AuditLog"] }),
     query(listOffices, { entities: ["Office", "AuditLog"] }),
     query(getOffice, { entities: ["Office", "AuditLog"] }),
+    action(updateOffice, { entities: ["Office", "AuditLog"] }),
     query(listOrgUsers, { entities: ["User", "AuditLog"] }),
     action(updateUserOffice, { entities: ["User", "Office", "AuditLog"] }),
+    action(updateUserManager, { entities: ["User", "AuditLog"] }),
     query(getOfficeChecklist, {
       entities: ["Office", "OfficeSetupProfile", "OfficeChecklistItem", "AuditLog"],
     }),
@@ -252,6 +348,16 @@ export default app({
       auth: false,
       middlewareConfigFn: paymentsWebhookMiddlewareConfigFn,
     }),
+    // Multer file uploads (https://wasp.sh/docs/guides/integrations/file-upload)
+    // ALL (not POST-only) so OPTIONS preflight hits CORS middleware — see fileUpload.ts.
+    api("ALL", "/api/upload", uploadDocumentFile, {
+      entities: ["User", "AuditLog"],
+      middlewareConfigFn: configureFileUploadMiddleware,
+    }),
+    api("ALL", "/api/upload/file", downloadUploadedFile, {
+      entities: ["User", "AuditLog"],
+      middlewareConfigFn: configureUploadDownloadMiddleware,
+    }),
     job(trialExpiryJob, {
       executor: "PgBoss",
       entities: ["Subscription", "NotificationLog", "AuditLog", "User"],
@@ -263,6 +369,9 @@ export default app({
     route("NewUtilityAccountRoute", "/app/utilities/new", page(NewUtilityAccountPage, { authRequired: true })),
     route("UtilityAccountDetailRoute", "/app/utilities/:accountId", page(UtilityAccountDetailPage, { authRequired: true })),
     action(createUtilityAccount, {
+      entities: ["Office", "UtilityAccount", "RecurringObligationSchedule", "AuditLog"],
+    }),
+    action(bulkImportUtilityAccounts, {
       entities: ["Office", "UtilityAccount", "RecurringObligationSchedule", "AuditLog"],
     }),
     query(listUtilityAccounts, { entities: ["UtilityAccount", "AuditLog"] }),
@@ -356,22 +465,133 @@ export default app({
     // Vendor Module (04-architecture.md, Build Step 08) -- F-14.
     route("VendorsRoute", "/app/vendors", page(VendorListPage, { authRequired: true })),
     route("VendorDetailRoute", "/app/vendors/:vendorId", page(VendorDetailPage, { authRequired: true })),
-    action(createVendor, { entities: ["Vendor", "AuditLog"] }),
-    query(listVendors, { entities: ["Vendor", "AuditLog"] }),
-    query(getVendor, { entities: ["Vendor", "AuditLog"] }),
-    action(activateVendor, { entities: ["Vendor", "AuditLog"] }),
-    action(recordVendorPerformanceReview, { entities: ["Vendor", "VendorPerformanceReview", "AuditLog"] }),
-    action(createAmcContract, {
-      entities: ["Vendor", "Office", "UtilityAccount", "AMCContract", "RecurringObligationSchedule", "AuditLog"],
+    action(createVendor, { entities: ["User", "Vendor", "AuditLog"] }),
+    action(bulkImportVendors, { entities: ["User", "Vendor", "AuditLog"] }),
+    query(listVendors, { entities: ["User", "Vendor", "AuditLog"] }),
+    query(getVendor, { entities: ["User", "Vendor", "AuditLog"] }),
+    action(activateVendor, { entities: ["User", "Vendor", "AuditLog"] }),
+    action(recordVendorPerformanceReview, {
+      entities: ["User", "Vendor", "VendorPerformanceReview", "AuditLog"],
     }),
-    query(listAmcContracts, { entities: ["AMCContract", "AuditLog"] }),
+    action(createAmcContract, {
+      entities: [
+        "User",
+        "Vendor",
+        "Office",
+        "UtilityAccount",
+        "AMCContract",
+        "RecurringObligationSchedule",
+        "ObligationInstance",
+        "AuditLog",
+      ],
+    }),
+    query(listAmcContracts, {
+      entities: ["User", "AMCContract", "RecurringObligationSchedule", "ObligationInstance", "AuditLog"],
+    }),
     action(closeAmcContract, {
       entities: ["AMCContract", "RecurringObligationSchedule", "AuditLog"],
     }),
     job(amcRenewalJob, {
       executor: "PgBoss",
-      entities: ["AMCContract", "NotificationRule", "NotificationLog", "User"],
+      entities: ["AMCContract", "RecurringObligationSchedule", "ObligationInstance", "NotificationRule", "NotificationLog", "User"],
       schedule: { cron: "30 5 * * *" }, // nightly at 05:30, after lease jobs
+    }),
+
+    // Facility & Maintenance Module (04-architecture.md, Build Step 08) -- F-15.
+    route("MaintenanceRoute", "/app/maintenance", page(MaintenanceListPage, { authRequired: true })),
+    route(
+      "MaintenanceDetailRoute",
+      "/app/maintenance/:requestId",
+      page(MaintenanceDetailPage, { authRequired: true }),
+    ),
+    action(createMaintenanceRequest, { entities: ["User", "MaintenanceRequest", "AuditLog"] }),
+    query(listMaintenanceRequests, { entities: ["User", "MaintenanceRequest", "AuditLog"] }),
+    query(getMaintenanceRequest, { entities: ["User", "MaintenanceRequest", "AuditLog"] }),
+    action(createWorkOrder, {
+      entities: ["User", "MaintenanceRequest", "Vendor", "WorkOrder", "AuditLog"],
+    }),
+    action(updateWorkOrderStatus, { entities: ["User", "WorkOrder", "MaintenanceRequest", "AuditLog"] }),
+    action(uploadWorkOrderEvidence, { entities: ["User", "WorkOrder", "WorkOrderEvidence", "AuditLog"] }),
+    action(verifyWorkOrder, { entities: ["User", "WorkOrder", "MaintenanceRequest", "AuditLog"] }),
+    job(slaBreachEscalationJob, {
+      executor: "PgBoss",
+      entities: ["WorkOrder", "MaintenanceRequest", "NotificationLog", "User"],
+      schedule: { cron: "45 5 * * *" }, // nightly at 05:45, after AMC renewals
+    }),
+
+    // Asset Module (04-architecture.md, Build Step 08) -- F-16.
+    route("AssetsRoute", "/app/assets", page(AssetListPage, { authRequired: true })),
+    route("AssetRequestsRoute", "/app/asset-requests", page(AssetRequestsPage, { authRequired: true })),
+    action(createAsset, { entities: ["User", "Asset", "AssetAssignment", "AuditLog"] }),
+    action(bulkImportAssets, { entities: ["User", "Office", "Asset", "AuditLog"] }),
+    query(listAssets, { entities: ["User", "Asset", "AuditLog"] }),
+    query(getAsset, { entities: ["User", "Asset", "AuditLog"] }),
+    action(setAssetStatus, { entities: ["User", "Asset", "AuditLog"] }),
+    action(createAssetRequest, { entities: ["User", "AssetRequest", "AuditLog"] }),
+    query(listMyAssetRequests, { entities: ["User", "AssetRequest", "AuditLog"] }),
+    query(listPendingManagerApprovals, { entities: ["User", "AssetRequest", "AuditLog"] }),
+    query(listAssetRequestsForOffice, { entities: ["User", "AssetRequest", "AuditLog"] }),
+    query(getAssetRequest, { entities: ["User", "AssetRequest", "AuditLog"] }),
+    action(decideAssetRequestAsManager, { entities: ["User", "AssetRequest", "AuditLog"] }),
+    action(allocateAssetRequest, {
+      entities: ["User", "AssetRequest", "Asset", "AssetAssignment", "AuditLog"],
+    }),
+    action(markAssetRequestProcurementPending, { entities: ["User", "AssetRequest", "AuditLog"] }),
+    job(assetWarrantyReminderJob, {
+      executor: "PgBoss",
+      entities: ["Asset", "NotificationRule", "NotificationLog", "User"],
+      schedule: { cron: "0 6 * * *" }, // nightly at 06:00, after facility jobs
+    }),
+
+    // Compliance Module (04-architecture.md, Build Step 08) -- F-17.
+    route("ComplianceRoute", "/app/compliance", page(ComplianceListPage, { authRequired: true })),
+    query(listComplianceItems, { entities: ["User", "ComplianceItem", "AuditLog"] }),
+    query(getComplianceItem, { entities: ["User", "ComplianceItem", "AuditLog"] }),
+    action(setComplianceApplicability, { entities: ["User", "ComplianceItem", "AuditLog"] }),
+    action(uploadComplianceDocument, {
+      entities: ["User", "ComplianceItem", "ComplianceDocument", "NotificationRule", "AuditLog"],
+    }),
+    job(complianceExpiryJob, {
+      executor: "PgBoss",
+      entities: ["ComplianceItem", "NotificationRule", "NotificationLog", "User"],
+      schedule: { cron: "15 6 * * *" }, // nightly at 06:15, after asset warranty reminders
+    }),
+
+    // Reporting Module (04-architecture.md, Build Step 09) -- F-18. Owns no
+    // primary data of its own -- reads across every transactional module.
+    route("MyActionsRoute", "/app/my-actions", page(MyActionsPage, { authRequired: true })),
+    query(listMyActions, {
+      entities: [
+        "User",
+        "Office",
+        "ApprovalStep",
+        "UtilityBill",
+        "RecurringObligationSchedule",
+        "ObligationInstance",
+        "UtilityAccount",
+        "Lease",
+        "AMCContract",
+        "AssetRequest",
+        "MaintenanceRequest",
+        "WorkOrder",
+        "Vendor",
+        "ComplianceItem",
+      ],
+    }),
+    route("ExecutiveDashboardRoute", "/app/reports/executive", page(ExecutiveDashboardPage, { authRequired: true })),
+    query(getExecutiveDashboard, {
+      entities: [
+        "User",
+        "Office",
+        "RecurringObligationSchedule",
+        "ObligationInstance",
+        "UtilityAccount",
+        "UtilityBill",
+        "Lease",
+        "AMCContract",
+        "ComplianceItem",
+        "AuditLog",
+      ],
     }),
   ],
 });

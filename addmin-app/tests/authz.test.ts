@@ -46,6 +46,15 @@ function makeEntities() {
   return { entities: { AuditLog: { create } as any }, create };
 }
 
+/** assertRole reads MFA from prisma.user — mirror the session user in tests. */
+function mockDbUserFromSession(user: AuthUser) {
+  vi.spyOn(prisma.user, "findUnique").mockResolvedValue({
+    role: user.role ?? null,
+    mfa_enabled: user.mfa_enabled ?? false,
+    mfa_verified_until: user.mfa_verified_until ?? null,
+  } as any);
+}
+
 describe("totp.ts (RFC 6238)", () => {
   it("a freshly generated secret's current code verifies", () => {
     const secret = generateBase32Secret();
@@ -107,6 +116,7 @@ describe("assertRole", () => {
   it("allows a role in the allow-list", async () => {
     const { entities } = makeEntities();
     const user = makeUser({ role: "office_admin" });
+    mockDbUserFromSession(user);
     await expect(assertRole(user, ["office_admin", "checker"], entities, "test")).resolves.toBe(
       user,
     );
@@ -115,6 +125,7 @@ describe("assertRole", () => {
   it("rejects a role not in the allow-list and logs the denial", async () => {
     const { entities, create } = makeEntities();
     const user = makeUser({ role: "employee" });
+    mockDbUserFromSession(user);
     await expect(assertRole(user, ["platform_admin"], entities, "inviteUser")).rejects.toMatchObject(
       { statusCode: 403 },
     );
@@ -134,6 +145,7 @@ describe("assertRole", () => {
     // mfa fields satisfied unconditionally -- this test is isolating role
     // gating specifically; MFA gating has its own dedicated tests above.
     const user = makeUser({ role, mfa_enabled: true, mfa_verified_until: mfaVerifiedUntil() });
+    mockDbUserFromSession(user);
     await expect(assertRole(user, [role], entities, "matrix-test")).resolves.toBeDefined();
     await expect(
       assertRole(user, ALL_ROLES.filter((r) => r !== role), entities, "matrix-test"),
@@ -143,6 +155,7 @@ describe("assertRole", () => {
   it("blocks an MFA-required role that hasn't enrolled yet", async () => {
     const { entities } = makeEntities();
     const user = makeUser({ role: "platform_admin", mfa_enabled: false });
+    mockDbUserFromSession(user);
     await expect(assertRole(user, ["platform_admin"], entities, "test")).rejects.toMatchObject({
       statusCode: 403,
     });
@@ -155,6 +168,7 @@ describe("assertRole", () => {
       mfa_enabled: true,
       mfa_verified_until: new Date(Date.now() - 1000),
     });
+    mockDbUserFromSession(user);
     await expect(assertRole(user, ["platform_admin"], entities, "test")).rejects.toMatchObject({
       statusCode: 403,
     });
@@ -167,6 +181,22 @@ describe("assertRole", () => {
       mfa_enabled: true,
       mfa_verified_until: mfaVerifiedUntil(),
     });
+    mockDbUserFromSession(user);
+    await expect(assertRole(user, ["platform_admin"], entities, "test")).resolves.toBe(user);
+  });
+
+  it("uses DB MFA window after verifyMfaLogin even when the session JWT is stale", async () => {
+    const { entities } = makeEntities();
+    const user = makeUser({
+      role: "platform_admin",
+      mfa_enabled: true,
+      mfa_verified_until: new Date(Date.now() - 1000),
+    });
+    vi.spyOn(prisma.user, "findUnique").mockResolvedValue({
+      role: "platform_admin",
+      mfa_enabled: true,
+      mfa_verified_until: mfaVerifiedUntil(),
+    } as any);
     await expect(assertRole(user, ["platform_admin"], entities, "test")).resolves.toBe(user);
   });
 });
@@ -175,12 +205,14 @@ describe("assertOfficeScope", () => {
   it("allows a user scoped to the target office", async () => {
     const { entities } = makeEntities();
     const user = makeUser({ office_scope: { "office-1": [] } });
+    mockDbUserFromSession(user);
     await expect(assertOfficeScope(user, "office-1", entities, "test")).resolves.toBeUndefined();
   });
 
   it("rejects and logs a cross-office access attempt", async () => {
     const { entities, create } = makeEntities();
     const user = makeUser({ office_scope: { "office-1": [] } });
+    mockDbUserFromSession(user);
     await expect(assertOfficeScope(user, "office-2", entities, "getOfficeChecklist")).rejects.toMatchObject(
       { statusCode: 403 },
     );
@@ -202,6 +234,7 @@ describe("assertOfficeScope", () => {
       mfa_enabled: true,
       mfa_verified_until: mfaVerifiedUntil(),
     });
+    mockDbUserFromSession(user);
     await expect(assertOfficeScope(user, "any-office", entities, "test")).resolves.toBeUndefined();
   });
 });
@@ -236,6 +269,7 @@ describe("assertRole: org suspension (F-20)", () => {
   it("allows a role-matching request while the org is active", async () => {
     const { entities } = makeEntities();
     const user = makeUser({ org_id: orgId });
+    mockDbUserFromSession(user);
     await expect(assertRole(user, ["office_admin"], entities, "test")).resolves.toBe(user);
   });
 
@@ -243,6 +277,7 @@ describe("assertRole: org suspension (F-20)", () => {
     await prisma.organization.update({ where: { id: orgId }, data: { tenant_status: "suspended" } });
     const { entities } = makeEntities();
     const user = makeUser({ org_id: orgId });
+    mockDbUserFromSession(user);
     await expect(assertRole(user, ["office_admin"], entities, "test")).rejects.toMatchObject({
       statusCode: 403,
     });

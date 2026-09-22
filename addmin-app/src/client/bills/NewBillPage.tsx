@@ -1,39 +1,29 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
-import { useQuery, listOffices, listUtilityAccounts, getUtilityAccount, createUtilityBill } from "wasp/client/operations";
+import { useNavigate } from "react-router";
+import { useQuery, listUtilityAccounts, getUtilityAccount, createUtilityBill } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
+import { DatePicker } from "../../shared/components/DatePicker";
+import { useSelectedOffice, NoOfficesInScope } from "../../shared/SelectedOfficeContext";
+import { PageLoading } from "../../shared/components/PageLoading";
 
 const OPEN_INSTANCE_STATUSES = ["expected", "missing"];
 
 const inputClass =
   "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-neutral-800 shadow-xs focus:border-primary-500 focus:outline-hidden focus:ring-1 focus:ring-primary-500";
 
-// F-09: amount > 0 and due date required, enforced server-side too --
-// this form just mirrors that so the error surfaces before a round trip.
 export function NewBillPage() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const { data: offices, isLoading: officesLoading } = useQuery(listOffices);
-
-  const [officeId, setOfficeId] = useState(searchParams.get("officeId") ?? "");
-  const effectiveOfficeId = officeId || offices?.[0]?.id || "";
+  const { officeId, isLoading: officesLoading, hasOffices } = useSelectedOffice();
 
   const { data: accounts, isLoading: accountsLoading } = useQuery(
     listUtilityAccounts,
-    effectiveOfficeId ? { officeId: effectiveOfficeId } : undefined,
-    { enabled: !!effectiveOfficeId },
+    officeId ? { officeId } : undefined,
+    { enabled: !!officeId },
   );
 
   const [accountId, setAccountId] = useState("");
   const effectiveAccountId = accountId || accounts?.[0]?.id || "";
 
-  // The obligation engine keys each period as "the billing cycle that just
-  // closed and is now due" (e.g. "2026-08" due by late September), which
-  // rarely matches what someone free-typing a period guesses (usually the
-  // current calendar month). Pulling the account's actual open obligation
-  // periods and offering them as a picker keeps the bill's billing_period
-  // byte-identical to the ObligationInstance it's meant to link to --
-  // see src/server/obligation/instanceLifecycle.ts's exact-string match.
   const { data: account } = useQuery(
     getUtilityAccount,
     effectiveAccountId ? { accountId: effectiveAccountId } : undefined,
@@ -73,29 +63,28 @@ export function NewBillPage() {
     }
   }
 
-  if (officesLoading) return null;
+  if (officesLoading) return <PageLoading />;
+
+  if (!hasOffices) {
+    return (
+      <div className="mx-auto w-full max-w-2xl p-12">
+        <NoOfficesInScope />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-2xl p-12">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Enter utility bill</h1>
+      <p className="mb-4 text-sm text-neutral-500">Connections are loaded for the office selected in the top bar.</p>
 
       <form onSubmit={onSubmit} className="card flex flex-col gap-6 p-8">
-        <div>
-          <label className="label">Office</label>
-          <select className={inputClass} value={effectiveOfficeId} onChange={(e) => setOfficeId(e.target.value)}>
-            {(offices ?? []).map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.name}
-              </option>
-            ))}
-          </select>
-        </div>
         <div>
           <label className="label">Utility connection</label>
           {!accountsLoading && (accounts?.length ?? 0) === 0 ? (
             <p className="text-sm text-neutral-500">No utility connections for this office yet.</p>
           ) : (
-            <select className={inputClass} value={effectiveAccountId} onChange={(e) => setAccountId(e.target.value)}>
+            <select className="select-field" value={effectiveAccountId} onChange={(e) => setAccountId(e.target.value)}>
               {(accounts ?? []).map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.provider_name} ({a.meter_account_no})
@@ -107,7 +96,7 @@ export function NewBillPage() {
         <div>
           <label className="label">Billing period</label>
           {openPeriods.length > 0 ? (
-            <select className={inputClass} value={billingPeriod} onChange={(e) => setBillingPeriod(e.target.value)}>
+            <select className="select-field" value={billingPeriod} onChange={(e) => setBillingPeriod(e.target.value)}>
               {openPeriods.map((p) => (
                 <option key={p.id} value={p.period}>
                   {p.period} (due {new Date(p.expected_date).toLocaleDateString()}) — {p.status}
@@ -144,13 +133,7 @@ export function NewBillPage() {
         </div>
         <div>
           <label className="label">Due date</label>
-          <input
-            type="date"
-            className={inputClass}
-            value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
-            required
-          />
+          <DatePicker className={inputClass} value={dueDate} onChange={setDueDate} required />
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}

@@ -12,6 +12,9 @@ const PUBLIC_AUTH_PATHS = [
   "/email-verification",
   "/platform/signin",
 ];
+// Both lists together equal shared/authScreenRoutes.ts's AUTH_SCREEN_PATHS --
+// kept separate here because this gate treats them differently (MFA_ROUTES
+// stay reachable even when logged in; PUBLIC_AUTH_PATHS redirect away).
 
 function LoadingScreen() {
   return <p className="p-12 text-center text-neutral-500">Loading…</p>;

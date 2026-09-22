@@ -2,8 +2,11 @@ import { ComponentProps } from "react";
 import { ClassNameValue, twJoin } from "tailwind-merge";
 import { Link } from "wasp/client/router";
 
-type ButtonSize = "md" | "sm" | "xs";
-type ButtonVariant = "primary" | "danger" | "ghost";
+// Matches the design system's Button.jsx spec (sizes: sm 32px / md 38px /
+// lg 44px; variants: primary / secondary / ghost / danger) -- see
+// Offices List.dc.html and the chat summary for where this got adopted.
+type ButtonSize = "sm" | "md" | "lg";
+type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 
 interface ButtonProps extends ComponentProps<"button"> {
   size?: ButtonSize;
@@ -69,7 +72,9 @@ function getButtonClasses({
   className: ClassNameValue;
 }): string {
   return twJoin(
-    "rounded-md font-semibold",
+    "inline-flex items-center justify-center gap-2 rounded-md border font-semibold outline-hidden transition-colors",
+    "focus-visible:ring-4 focus-visible:ring-primary-100",
+    "disabled:cursor-not-allowed disabled:border-neutral-100 disabled:bg-neutral-50 disabled:text-neutral-400",
     variantStyles[variant],
     sizeStyles[size],
     className,
@@ -77,15 +82,17 @@ function getButtonClasses({
 }
 
 const sizeStyles: Record<ButtonSize, ClassNameValue> = {
-  md: "px-4 py-2",
-  sm: "px-3 py-1.5 text-sm",
-  xs: "px-2 py-1 text-xs",
+  sm: "h-8 px-3 text-sm",
+  md: "h-9.5 px-4 text-sm",
+  lg: "h-11 px-5 text-sm",
 };
 
 const variantStyles: Record<ButtonVariant, ClassNameValue> = {
   primary:
-    "bg-primary-500 hover:bg-primary-600 active:bg-primary-700 text-white",
-  danger: "bg-red-600 text-white hover:bg-red-700 active:bg-red-800",
+    "border-transparent bg-primary-500 text-white hover:bg-primary-600 active:bg-primary-700",
+  secondary:
+    "border-neutral-300 bg-white text-neutral-900 hover:bg-neutral-50 active:bg-neutral-100",
   ghost:
-    "bg-transparent text-neutral-800 hover:bg-neutral-100 active:bg-neutral-200",
+    "border-transparent bg-transparent text-neutral-900 hover:bg-neutral-100 active:bg-neutral-200",
+  danger: "border-transparent bg-red-600 text-white hover:bg-red-700 active:bg-red-800",
 };

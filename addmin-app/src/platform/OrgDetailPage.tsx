@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { platformApiUrl } from "./apiBase";
+import { sentenceCase } from "../shared/text";
 
 type OrgRow = {
   id: string;
@@ -129,11 +130,11 @@ export function OrgDetailPage() {
             <select
               value={plan}
               onChange={(e) => setPlan(e.target.value)}
-              className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2"
+              className="mt-1 select-field"
             >
               {PLANS.map((p) => (
                 <option key={p} value={p}>
-                  {p}
+                  {sentenceCase(p)}
                 </option>
               ))}
             </select>
@@ -143,11 +144,11 @@ export function OrgDetailPage() {
             <select
               value={status}
               onChange={(e) => setStatus(e.target.value)}
-              className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2"
+              className="mt-1 select-field"
             >
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {sentenceCase(s)}
                 </option>
               ))}
             </select>

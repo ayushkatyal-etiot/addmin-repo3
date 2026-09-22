@@ -10,10 +10,24 @@ import { prisma } from "wasp/server";
 // Build Step 03 and src/server/admin/invites.ts (the platform_admin-only
 // action that creates+emails these tokens).
 //
-// The client passes `inviteToken` as an extra field on the raw signup
-// payload (src/auth/email/SignupPage.tsx) -- it isn't a User column, so it's
-// read out of the untyped `data` object each getter receives, not declared
-// as a field below.
+// The client passes `inviteToken` and `plan` as extra fields on the raw
+// signup payload (src/auth/email/SignupPage.tsx) -- neither is a User
+// column, so both are read out of the untyped `data` object each getter
+// receives, not declared as fields below.
+
+// Marketing site CTAs only ever send "starter" or "growth" (Enterprise's
+// card links to /contact, never /signup -- see addmin-marketing's
+// pricing.ts). Anything else -- missing, malformed, or "enterprise" typed
+// in by hand -- degrades to "starter" rather than erroring, per Build Step
+// 10's named edge case ("an unrecognized plan value should degrade
+// gracefully, not error").
+const SELF_SERVE_PLANS = ["starter", "growth"] as const;
+export function resolvePlan(data: { [key: string]: unknown }): (typeof SELF_SERVE_PLANS)[number] {
+  const requested = typeof data.plan === "string" ? data.plan : undefined;
+  return (SELF_SERVE_PLANS as readonly string[]).includes(requested ?? "")
+    ? (requested as (typeof SELF_SERVE_PLANS)[number])
+    : "starter";
+}
 
 // Read-only and safe to call from more than one field getter for the same
 // signup request -- Wasp doesn't guarantee getter execution order, so this
@@ -80,7 +94,7 @@ export const userSignupFields = defineUserSignupFields({
     await prisma.subscription.create({
       data: {
         org_id: org.id,
-        plan: "starter",
+        plan: resolvePlan(data),
         status: "trialing",
         trial_ends_at: new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000),
       },

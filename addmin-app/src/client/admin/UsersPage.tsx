@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { useQuery, listOrgUsers, listOffices, inviteUser, updateUserOffice } from "wasp/client/operations";
+import { useQuery, listOrgUsers, listOffices, inviteUser, updateUserOffice, updateUserManager } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
+import { sentenceCase } from "../../shared/text";
 
 const ROLES = [
   "platform_admin",
@@ -58,13 +59,13 @@ function OfficeRolePicker({
           </label>
           {o.id in value && (
             <select
-              className="rounded-md border border-neutral-300 px-2 py-1 text-xs"
+              className="select-field"
               value={value[o.id]}
               onChange={(e) => setRoleFor(o.id, e.target.value)}
             >
               {ROLES.filter((r) => r !== "platform_admin").map((r) => (
                 <option key={r} value={r}>
-                  {r}
+                  {sentenceCase(r)}
                 </option>
               ))}
             </select>
@@ -103,6 +104,18 @@ export function UsersPage() {
     }
   }
 
+  // F-16: who approves this user's asset requests -- see createAssetRequest
+  // (src/server/asset/asset.ts). "" in the select means "no manager".
+  async function onManagerChange(userId: string, managerUserId: string) {
+    setRowError(null);
+    try {
+      await updateUserManager({ userId, managerUserId: managerUserId || null });
+      await refetch();
+    } catch (err) {
+      setRowError(err instanceof Error ? err.message : "Could not update manager.");
+    }
+  }
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -126,7 +139,6 @@ export function UsersPage() {
   return (
     <div className="mx-auto w-full max-w-4xl p-12">
       <h1 className="mb-6 text-2xl font-semibold text-neutral-900">Users</h1>
-
       <ErrorBanner error={loadError} />
 
       <form onSubmit={onSubmit} className="card mb-8 flex flex-col gap-4 p-8">
@@ -145,7 +157,7 @@ export function UsersPage() {
           <div>
             <label className="label">Default role</label>
             <select
-              className={inputClass}
+              className="select-field"
               value={role}
               onChange={(e) => {
                 setRole(e.target.value);
@@ -154,7 +166,7 @@ export function UsersPage() {
             >
               {ROLES.map((r) => (
                 <option key={r} value={r}>
-                  {r}
+                  {sentenceCase(r)}
                 </option>
               ))}
             </select>
@@ -186,13 +198,13 @@ export function UsersPage() {
 
       {rowError && <p className="mb-2 text-sm text-red-600">{rowError}</p>}
 
-      <div className="card overflow-hidden">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-neutral-50 text-neutral-500">
+        <table className="table-shell">
+          <thead>
             <tr>
-              <th className="px-4 py-3">Email</th>
-              <th className="px-4 py-3">Role</th>
-              <th className="px-4 py-3">Offices &amp; roles</th>
+              <th className="table-head-cell">Email</th>
+              <th className="table-head-cell">Role</th>
+              <th className="table-head-cell">Offices &amp; roles</th>
+              <th className="table-head-cell">Manager</th>
             </tr>
           </thead>
           <tbody>
@@ -201,10 +213,10 @@ export function UsersPage() {
                 Object.entries(u.office_scope ?? {}).map(([officeId, roles]) => [officeId, roles[0]]),
               );
               return (
-                <tr key={u.id} className="border-t border-neutral-100 align-top">
-                  <td className="px-4 py-3 text-neutral-900">{u.email}</td>
-                  <td className="px-4 py-3 text-neutral-600">{u.role}</td>
-                  <td className="px-4 py-3">
+                <tr key={u.id} className="table-row-hover align-top">
+                  <td className="table-cell text-neutral-900">{u.email}</td>
+                  <td className="table-cell text-neutral-600">{u.role}</td>
+                  <td className="table-cell">
                     {u.role === "platform_admin" ? (
                       <span className="text-neutral-400">All offices</span>
                     ) : (
@@ -216,12 +228,27 @@ export function UsersPage() {
                       />
                     )}
                   </td>
+                  <td className="table-cell">
+                    <select
+                      className="select-field"
+                      value={u.manager_user_id ?? ""}
+                      onChange={(e) => onManagerChange(u.id, e.target.value)}
+                    >
+                      <option value="">No manager</option>
+                      {(users ?? [])
+                        .filter((m) => m.id !== u.id)
+                        .map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.email}
+                          </option>
+                        ))}
+                    </select>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-      </div>
     </div>
   );
 }

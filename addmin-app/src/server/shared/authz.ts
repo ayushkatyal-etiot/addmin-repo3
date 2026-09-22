@@ -38,7 +38,7 @@ export async function assertRole(
     throw new HttpError(401);
   }
   await assertOrgNotSuspended(user);
-  requireMfaIfEnabled(user);
+  await requireMfaIfEnabled(user);
 
   if (!user.role || !allowedRoles.includes(user.role)) {
     await logDenial(entities, user, actionLabel, "role_denied");
@@ -59,7 +59,7 @@ export async function assertOfficeScope(
   entities: { AuditLog: PrismaClient["auditLog"] },
   actionLabel: string,
 ): Promise<void> {
-  requireMfaIfEnabled(user);
+  await requireMfaIfEnabled(user);
 
   const officeScope = (user.office_scope ?? {}) as Record<string, string[]>;
   const hasUnrestrictedAccess = user.role === "platform_admin";
@@ -87,14 +87,21 @@ async function assertOrgNotSuspended(user: AuthUser): Promise<void> {
   }
 }
 
-function requireMfaIfEnabled(user: AuthUser): void {
-  const mfaIsRequiredForRole =
-    !!user.role && (MFA_REQUIRED_ROLES as readonly string[]).includes(user.role);
+/** Reads MFA fields from the User row — Wasp's session JWT does not update when verifyMfaLogin runs. */
+async function requireMfaIfEnabled(user: AuthUser): Promise<void> {
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { role: true, mfa_enabled: true, mfa_verified_until: true },
+  });
+  if (!dbUser) throw new HttpError(401);
 
-  if (mfaIsRequiredForRole && !user.mfa_enabled) {
+  const mfaIsRequiredForRole =
+    !!dbUser.role && (MFA_REQUIRED_ROLES as readonly string[]).includes(dbUser.role);
+
+  if (mfaIsRequiredForRole && !dbUser.mfa_enabled) {
     throw new HttpError(403, "MFA enrollment required for this role.");
   }
-  if (user.mfa_enabled && !isMfaCurrentlyVerified(user.mfa_verified_until)) {
+  if (dbUser.mfa_enabled && !isMfaCurrentlyVerified(dbUser.mfa_verified_until)) {
     throw new HttpError(403, "MFA verification required.");
   }
 }
@@ -116,4 +123,29 @@ async function logDenial(
       action: `denied:${reason}`,
     },
   });
+}
+
+/**
+ * Wasp's auth session can lag the User row (org_id/role/MFA updated in DB after
+ * login). Re-read those fields before org-scoped queries so list endpoints
+ * don't silently return empty arrays for valid admins.
+ */
+export async function userFromSession(
+  user: AuthUser | null | undefined,
+  entities: { User: PrismaClient["user"] },
+): Promise<AuthUser> {
+  if (!user) throw new HttpError(401);
+  const dbUser = await entities.User.findUnique({ where: { id: user.id } });
+  if (!dbUser) throw new HttpError(401);
+
+  return {
+    ...user,
+    org_id: dbUser.org_id,
+    role: dbUser.role,
+    office_scope: dbUser.office_scope,
+    mfa_enabled: dbUser.mfa_enabled,
+    mfa_secret: dbUser.mfa_secret,
+    mfa_verified_until: dbUser.mfa_verified_until,
+    authorization_limit: dbUser.authorization_limit,
+  } as AuthUser;
 }

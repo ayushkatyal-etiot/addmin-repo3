@@ -34,8 +34,8 @@ export function PlatformSigninPage() {
   }
 
   return (
-    <div className="flex justify-center">
-      <div className="card mt-32 h-fit w-full max-w-md px-8 py-10">
+    <div className="flex min-h-screen items-center justify-center">
+      <div className="card h-fit w-full max-w-md px-8 py-10">
         <h1 className="mb-4 text-2xl font-semibold text-neutral-900">
           Platform Operator sign in
         </h1>

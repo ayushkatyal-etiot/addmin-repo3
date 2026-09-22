@@ -1,27 +1,24 @@
-import { useSearchParams, useNavigate } from "react-router";
-import { useQuery, listOffices, listUtilityBills } from "wasp/client/operations";
-import { Link } from "wasp/client/router";
+import { useNavigate } from "react-router";
+import { useQuery, listUtilityBills } from "wasp/client/operations";
 import { Button } from "../../shared/components/Button";
+import { Badge, type BadgeTone } from "../../shared/components/Badge";
 import { ErrorBanner } from "../../shared/components/ErrorBanner";
+import { useSelectedOffice, NoOfficesInScope } from "../../shared/SelectedOfficeContext";
+import { sentenceCase } from "../../shared/text";
 
-const STATUS_CLASS: Record<string, string> = {
-  draft: "bg-neutral-100 text-neutral-600",
-  pending_approval: "bg-amber-100 text-amber-800",
-  approved: "bg-primary-100 text-primary-800",
-  rejected: "bg-red-100 text-red-700",
-  partially_paid: "bg-blue-100 text-blue-800",
-  paid: "bg-green-100 text-green-800",
-  overdue: "bg-red-100 text-red-800",
+const STATUS_TONE: Record<string, BadgeTone> = {
+  draft: "neutral",
+  pending_approval: "warning",
+  approved: "success",
+  rejected: "danger",
+  partially_paid: "info",
+  paid: "success",
+  overdue: "danger",
 };
 
-// F-09 (planmysaas-blueprint/05-features.md): bill entry list, same
-// office-switcher-on-page pattern as UtilitiesListPage (Step 06).
 export function BillsListPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { data: offices, isLoading: officesLoading, error: officesError } = useQuery(listOffices);
-
-  const officeId = searchParams.get("officeId") ?? offices?.[0]?.id ?? "";
+  const { officeId, isLoading: officesLoading, error: officesError, hasOffices } = useSelectedOffice();
   const { data: bills, isLoading: billsLoading, error: billsError } = useQuery(
     listUtilityBills,
     officeId ? { officeId } : undefined,
@@ -39,12 +36,10 @@ export function BillsListPage() {
     );
   }
 
-  if (!offices || offices.length === 0) {
+  if (!hasOffices) {
     return (
       <div className="mx-auto w-full max-w-4xl p-12">
-        <div className="card p-8 text-center text-neutral-500">
-          No offices in your scope. Ask an admin to assign you to an office when inviting you.
-        </div>
+        <NoOfficesInScope />
       </div>
     );
   }
@@ -53,21 +48,7 @@ export function BillsListPage() {
     <div className="mx-auto w-full max-w-4xl p-12">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-neutral-900">Utility bills</h1>
-        <Button onClick={() => navigate(`/app/bills/new?officeId=${officeId}`)}>Enter bill</Button>
-      </div>
-
-      <div className="mb-4">
-        <select
-          className="rounded-md border border-neutral-300 px-3 py-2 text-sm"
-          value={officeId}
-          onChange={(e) => setSearchParams({ officeId: e.target.value })}
-        >
-          {offices.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name}
-            </option>
-          ))}
-        </select>
+        <Button onClick={() => navigate("/app/bills/new")}>Enter bill</Button>
       </div>
 
       <ErrorBanner error={billsError} />
@@ -79,16 +60,15 @@ export function BillsListPage() {
       )}
 
       {!billsLoading && bills && bills.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-neutral-50 text-neutral-500">
+          <table className="table-shell">
+            <thead>
               <tr>
-                <th className="px-4 py-3">Provider</th>
-                <th className="px-4 py-3">Period</th>
-                <th className="px-4 py-3">Amount</th>
-                <th className="px-4 py-3">Due date</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
+                <th className="table-head-cell">Provider</th>
+                <th className="table-head-cell">Period</th>
+                <th className="table-head-cell">Amount</th>
+                <th className="table-head-cell">Due date</th>
+                <th className="table-head-cell">Status</th>
+                <th className="table-head-cell" />
               </tr>
             </thead>
             <tbody>
@@ -98,21 +78,18 @@ export function BillsListPage() {
                   className="cursor-pointer border-t border-neutral-100 hover:bg-neutral-50"
                   onClick={() => navigate(`/app/bills/${b.id}`)}
                 >
-                  <td className="px-4 py-3 font-medium text-neutral-900">{b.provider_name}</td>
-                  <td className="px-4 py-3 text-neutral-600">{b.billing_period}</td>
-                  <td className="px-4 py-3 text-neutral-600">{b.amount}</td>
-                  <td className="px-4 py-3 text-neutral-600">{new Date(b.due_date).toLocaleDateString()}</td>
-                  <td className="px-4 py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_CLASS[b.status]}`}>
-                      {b.status.replace("_", " ")}
-                    </span>
+                  <td className="table-cell font-medium text-neutral-900">{b.provider_name}</td>
+                  <td className="table-cell text-neutral-600">{b.billing_period}</td>
+                  <td className="table-cell text-neutral-600">{b.amount}</td>
+                  <td className="table-cell text-neutral-600">{new Date(b.due_date).toLocaleDateString()}</td>
+                  <td className="table-cell">
+                    <Badge tone={STATUS_TONE[b.status] ?? "neutral"}>{sentenceCase(b.status)}</Badge>
                   </td>
-                  <td className="px-4 py-3 text-right text-primary-600 underline">View</td>
+                  <td className="table-cell text-right text-primary-600 underline">View</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
       )}
     </div>
   );

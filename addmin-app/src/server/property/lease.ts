@@ -8,8 +8,8 @@ import { reconcileLeaseObligationInstances } from "../obligation/instanceLifecyc
 // Lease Module. createLease also creates the rent (and CAM, if present)
 // RecurringObligationSchedule in the same call, mirroring Step 06's
 // UtilityAccount+schedule invariant -- see src/server/utility/account.ts.
-const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
-const LEASE_READ_ROLES: Role[] = [...OFFICE_ADMIN_ROLES, "office_head", "payment_authorizer"];
+export const OFFICE_ADMIN_ROLES: Role[] = ["platform_admin", "office_admin"];
+export const LEASE_READ_ROLES: Role[] = [...OFFICE_ADMIN_ROLES, "office_head", "payment_authorizer"];
 
 // Not exposed as a form field -- every lease's rent obligation windows 7
 // days ahead of its due date, same default the utility module uses. Revisit

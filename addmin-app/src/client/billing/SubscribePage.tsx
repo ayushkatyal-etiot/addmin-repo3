@@ -11,10 +11,24 @@ const STATUS_LABEL: Record<string, string> = {
   canceled: "Canceled",
 };
 
-// F-19 (planmysaas-blueprint/05-features.md): trial banner + plan cards +
-// Stripe Checkout redirect. Reads ?plan= carried from /signup (marketing
-// site's "Start Free Trial" CTA per 09-marketing-website.md) and ?success=/
-// ?canceled= carried back from Stripe's redirect after checkout.
+// Display-only labels -- NOT what Stripe actually charges. The real Stripe
+// Price for "starter" is a ₹100/month dev placeholder (see
+// src/server/billing/stripeClient.ts); showing addmin-marketing's real
+// ₹15,000/₹25,000 figures here, next to a ₹100 checkout, would be a worse
+// customer-trust bug than the gap this page is fixing. Only the plan NAME
+// (which plan the org actually signed up for) is real; the price shown for
+// "starter" matches what Stripe will actually charge in this environment.
+const PLAN_LABEL: Record<string, string> = {
+  starter: "Starter",
+  growth: "Growth",
+  enterprise: "Enterprise",
+};
+
+// F-19 (planmysaas-blueprint/05-features.md): trial banner + plan card +
+// Stripe Checkout redirect. subscription.plan reflects whatever the visitor
+// picked on the marketing site's pricing page (?plan= on /signup, resolved
+// server-side in userSignupFields.ts) -- ?success=/?canceled= are carried
+// back from Stripe's redirect after checkout.
 export function SubscribePage() {
   const [searchParams] = useSearchParams();
   const { data: subscription, isLoading, refetch } = useQuery(getSubscription);
@@ -45,7 +59,6 @@ export function SubscribePage() {
   return (
     <div className="mx-auto w-full max-w-2xl p-12">
       <h1 className="mb-2 text-2xl font-semibold text-neutral-900">Subscription</h1>
-
       {success && (
         <div className="card mb-4 border-primary-200 bg-primary-50 p-4 text-sm text-primary-800">
           Payment received -- your plan will update within a few seconds once Stripe's webhook confirms it.{" "}
