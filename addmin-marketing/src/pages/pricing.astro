@@ -1,0 +1,50 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import PricingCard from "../components/PricingCard.astro";
+import Faq from "../components/Faq.astro";
+import { PLANS } from "../content/pricing";
+
+const faqs = [
+  {
+    question: "What happens after my trial ends?",
+    answer:
+      "Your 14-day trial doesn't require a card to start. When it ends, you'll be asked to confirm a plan to keep going — nothing is charged automatically, and nothing you've set up is deleted while you decide.",
+  },
+  {
+    question: "Can I change plans later?",
+    answer:
+      "Yes. As you add offices or need the approval workflow and compliance tracking, you can move up a plan at any time — your setup and history carry over.",
+  },
+  {
+    question: "How many offices can I add on Starter?",
+    answer: "Starter covers up to 5 offices. Growth covers up to 10. Above that, Enterprise is priced by conversation.",
+  },
+];
+---
+
+<BaseLayout
+  title="Pricing"
+  description="Three plans — Starter, Growth, and Enterprise. Every plan starts with a 14-day free trial, no card required."
+>
+  <section class="hero container">
+    <span class="eyebrow">Pricing</span>
+    <h1>Straightforward pricing, no sales call required</h1>
+    <p class="lede">Pick a plan by how many offices you run. Every plan starts with a 14-day free trial.</p>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <h2 class="visually-hidden">Plans</h2>
+      <div class="grid grid-3">
+        {PLANS.map((plan) => <PricingCard plan={plan} />)}
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-soft">
+    <div class="container" style="max-width: 42rem;">
+      <h2 class="text-center">Questions before you pick a plan</h2>
+      <Faq items={faqs} />
+    </div>
+  </section>
+</BaseLayout>

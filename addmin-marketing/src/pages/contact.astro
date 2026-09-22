@@ -1,0 +1,98 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+// No form-handling service is wired up yet (this is a static site with no
+// server of its own, per Step 10's tech decision -- see 09-marketing-website.md's
+// "nothing on the marketing site requires a login" and the architecture note
+// against building any part of this inside the Wasp app). Configure
+// PUBLIC_CONTACT_FORM_ENDPOINT (e.g. a Formspree/Basin endpoint) before
+// launch; until then the form degrades to the always-visible mailto link
+// below rather than silently losing a lead.
+const FORM_ENDPOINT = import.meta.env.PUBLIC_CONTACT_FORM_ENDPOINT ?? "";
+const CONTACT_EMAIL = "hello@addmin.example";
+---
+
+<BaseLayout
+  title="Contact / Book a demo"
+  description="Talk to us about an Enterprise plan or a design-partner pilot."
+>
+  <section class="hero container">
+    <span class="eyebrow">Contact</span>
+    <h1>Want to talk it through first?</h1>
+    <p class="lede" style="max-width: 36rem; margin: 0 auto;">
+      For an Enterprise-size company, or a design-partner pilot, tell us a bit about your offices and we'll get back
+      to you. If you'd rather just get started, <a href="/pricing">Start Free Trial</a> takes less time than this
+      form.
+    </p>
+  </section>
+
+  <section class="section" style="max-width: 32rem; margin: 0 auto;">
+    <div class="container">
+      <form id="contact-form" class="card" data-endpoint={FORM_ENDPOINT}>
+        <div style="margin-bottom: 1rem;">
+          <label for="name" style="display:block; font-weight: 600; margin-bottom: 0.25rem;">Name</label>
+          <input id="name" name="name" type="text" required style="width: 100%; padding: 0.6rem; border: 1px solid var(--color-border); border-radius: 0.4rem;" />
+        </div>
+        <div style="margin-bottom: 1rem;">
+          <label for="email" style="display:block; font-weight: 600; margin-bottom: 0.25rem;">Work email</label>
+          <input id="email" name="email" type="email" required style="width: 100%; padding: 0.6rem; border: 1px solid var(--color-border); border-radius: 0.4rem;" />
+        </div>
+        <div style="margin-bottom: 1rem;">
+          <label for="offices" style="display:block; font-weight: 600; margin-bottom: 0.25rem;">Number of offices</label>
+          <input id="offices" name="offices" type="text" placeholder="e.g. 12" style="width: 100%; padding: 0.6rem; border: 1px solid var(--color-border); border-radius: 0.4rem;" />
+        </div>
+        <div style="margin-bottom: 1.25rem;">
+          <label for="message" style="display:block; font-weight: 600; margin-bottom: 0.25rem;">What would you like to talk about?</label>
+          <textarea id="message" name="message" rows="4" style="width: 100%; padding: 0.6rem; border: 1px solid var(--color-border); border-radius: 0.4rem;"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%;">Send</button>
+        <p id="contact-status" role="status" style="margin-top: 0.75rem; font-size: 0.9rem;"></p>
+      </form>
+      <p class="muted text-center" style="margin-top: 1.5rem;">
+        Prefer email? Write to us directly at <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+      </p>
+    </div>
+  </section>
+
+  <script define:vars={{ CONTACT_EMAIL }}>
+    const form = document.getElementById("contact-form");
+    const status = document.getElementById("contact-status");
+    const endpoint = form?.dataset.endpoint;
+
+    form?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const submitButton = form.querySelector("button[type=submit]");
+
+      if (!endpoint) {
+        // No form-handling endpoint configured yet -- fail visibly with a
+        // clear next step, never a silent "nothing happened."
+        status.textContent = `This form isn't connected yet. Please email us directly at ${CONTACT_EMAIL} and we'll reply as soon as we can.`;
+        status.style.color = "#b91c1c";
+        return;
+      }
+
+      submitButton.disabled = true;
+      status.textContent = "Sending…";
+      status.style.color = "";
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { Accept: "application/json" },
+          body: new FormData(form),
+        });
+        if (!response.ok) throw new Error("Request failed");
+        status.textContent = "Thanks — we'll be in touch shortly.";
+        status.style.color = "#0b814d";
+        form.reset();
+      } catch {
+        // Step 10 edge case: a delivery failure must show a clear retry
+        // message, not a silent failure that loses the lead.
+        status.textContent = `Something went wrong sending this. Please try again, or email us directly at ${CONTACT_EMAIL}.`;
+        status.style.color = "#b91c1c";
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
+  </script>
+</BaseLayout>

@@ -1,0 +1,65 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+const trustPoints = [
+  {
+    title: "Two-factor sign-in for admin roles",
+    body: "Anyone with access to approve payments or manage your organization must enable two-factor sign-in — it isn't optional for those roles.",
+  },
+  {
+    title: "Every action is recorded",
+    body: "Who approved a payment, who changed a setting, who uploaded a certificate — every one of those actions is logged, so you can always answer \"who did this, and when.\"",
+  },
+  {
+    title: "Segregation of duties is enforced, not just suggested",
+    body: "The person who raises a bill can never also be the one who approves it. This is enforced by the system on every request, not left to office policy.",
+  },
+  {
+    title: "Your organization's data stays your organization's",
+    body: "Every office, bill, lease, and certificate is scoped to your organization alone. Nobody outside your team's assigned roles can see it.",
+  },
+];
+---
+
+<BaseLayout
+  title="About & trust"
+  description="Why a company should trust AddMin with its compliance and payment data."
+>
+  <section class="hero container">
+    <span class="eyebrow">About &amp; trust</span>
+    <h1>Built for the people who get blamed when something is missed</h1>
+    <p class="lede" style="max-width: 42rem; margin: 0 auto;">
+      AddMin exists because a missed bill, a lapsed lease, or an expired licence shouldn't come down to one person's
+      memory. We're an early-stage team building this with real design-partner offices, not a side project.
+    </p>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <h2 class="text-center">Why you can trust it with compliance and payment data</h2>
+      <div class="grid grid-2" style="margin-top: 2rem;">
+        {
+          trustPoints.map((point) => (
+            <div class="card">
+              <h3 style="font-size: 1.05rem;">{point.title}</h3>
+              <p class="muted">{point.body}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-soft text-center">
+    <div class="container">
+      <h2>Where we are today</h2>
+      <p class="muted" style="max-width: 36rem; margin: 0 auto;">
+        We're working directly with our first design-partner organizations to make sure the product matches how
+        offices actually run — not a guess at it. If you want to be one of them, we'd like to hear from you.
+      </p>
+      <div class="hero-actions">
+        <a href="/contact" class="btn btn-primary">Talk to us</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

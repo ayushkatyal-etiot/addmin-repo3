@@ -1,0 +1,5 @@
+office_code,category,serial_no,warranty_end
+DEMO-HQ,Laptop,DEMO-LAP-001,2027-12-31
+DEMO-HQ,Monitor,DEMO-MON-002,2026-06-30
+DEMO-HQ,Printer,,2025-03-15
+DEMO-HQ,UPS,DEMO-UPS-004,

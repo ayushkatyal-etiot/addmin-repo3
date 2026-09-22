@@ -1,0 +1,130 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import PricingCard from "../components/PricingCard.astro";
+import Faq from "../components/Faq.astro";
+import { PLANS } from "../content/pricing";
+
+const APP_URL = import.meta.env.PUBLIC_APP_URL ?? "https://app.addmin.example";
+
+const whatItDoes = [
+  { title: "Onboarding checklist", body: "Tells you what needs to be set up — utilities, leases, licences, vendors." },
+  { title: "Obligation engine", body: "Knows a bill is coming before it arrives." },
+  { title: "Approvals", body: "Nothing gets paid without the right sign-off." },
+  { title: "Office dashboard", body: "See what's due, overdue, or expiring — for one office or all of them." },
+  { title: "Executive view", body: "One dashboard for the whole company's spend and risk." },
+];
+
+const faqs = [
+  {
+    question: "Is my data safe?",
+    answer:
+      "Every account is protected by mandatory two-factor sign-in for admin roles, and every payment approval is recorded so you always know who approved what and when.",
+  },
+  {
+    question: "Can I try it before paying?",
+    answer: "Yes. Every plan starts with a 14-day free trial, and no card is required to begin.",
+  },
+  {
+    question: "What if I only have 2 offices?",
+    answer: "Starter is built for exactly that — a handful of offices getting utility and lease tracking under control.",
+  },
+  {
+    question: "How is this different from a spreadsheet?",
+    answer:
+      "A spreadsheet doesn't tell you a bill is coming — you have to remember to check it. AddMin tracks every obligation and flags it before it's due, automatically.",
+  },
+];
+---
+
+<BaseLayout
+  title="Track every bill, lease, and licence automatically"
+  description="AddMin tells your admin team what needs attention across every office — utility bills, lease renewals, and compliance licences — before they're missed."
+>
+  <!-- 1. Opening line and headline -->
+  <section class="hero container">
+    <span class="eyebrow">For teams running more than one office</span>
+    <h1>Stop finding out a bill was missed after it's already late.</h1>
+    <p class="lede" style="max-width: 40rem; margin: 0 auto;">
+      AddMin is the system that tells your admin team what needs attention — utility bills, lease renewals, vendor
+      contracts, and compliance licences — instead of waiting for them to remember.
+    </p>
+    <div class="hero-actions">
+      <a href={`${APP_URL}/signup`} class="btn btn-primary">Start Free Trial</a>
+      <a href="/contact" class="btn-link" style="align-self: center;">Book a Demo</a>
+    </div>
+  </section>
+
+  <!-- 2. The problem, shown plainly -->
+  <section class="section section-soft">
+    <div class="container grid grid-2">
+      <div class="card">
+        <span class="eyebrow">Today</span>
+        <p>Spreadsheets, WhatsApp reminders, and a bill that shows up late because nobody was watching for it.</p>
+      </div>
+      <div class="card">
+        <span class="eyebrow">With AddMin</span>
+        <p>Every obligation tracked automatically, flagged before it's due — for every office, not just the ones someone remembers to check.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. What it actually does -->
+  <section class="section">
+    <div class="container">
+      <h2 class="text-center">What it actually does</h2>
+      <div class="grid grid-3" style="margin-top: 2rem;">
+        {
+          whatItDoes.map((item) => (
+            <div class="card">
+              <h3 style="font-size: 1.1rem;">{item.title}</h3>
+              <p class="muted">{item.body}</p>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Who trusts this -->
+  <section class="section section-soft text-center">
+    <div class="container">
+      <h2>Who trusts this</h2>
+      <p class="muted">
+        We're working with our first design-partner offices right now. Real customer stories will live here once
+        they're ready to share them — not before.
+      </p>
+    </div>
+  </section>
+
+  <!-- 5. Pricing preview -->
+  <section class="section">
+    <div class="container">
+      <h2 class="text-center">Simple, transparent pricing</h2>
+      <p class="text-center muted">Three plans. Start free for 14 days, no card required.</p>
+      <div class="grid grid-3" style="margin-top: 2rem;">
+        {PLANS.map((plan) => <PricingCard plan={plan} />)}
+      </div>
+      <p class="text-center" style="margin-top: 1.5rem;">
+        <a href="/pricing" class="btn-link">See full pricing →</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- 6. FAQ -->
+  <section class="section section-soft">
+    <div class="container" style="max-width: 42rem;">
+      <h2 class="text-center">Questions people ask before signing up</h2>
+      <Faq items={faqs} />
+    </div>
+  </section>
+
+  <!-- 7. Final call to action -->
+  <section class="section text-center">
+    <div class="container">
+      <h2>Ready to stop chasing missed bills?</h2>
+      <div class="hero-actions">
+        <a href={`${APP_URL}/signup`} class="btn btn-primary">Start Free Trial</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

@@ -1,0 +1,20 @@
+# Separate Fly.io app from addmin-app (the Wasp product) -- Step 10's whole
+# point is that a marketing-site change never requires a product redeploy,
+# and vice versa. Run `fly launch` once to create the app before the first
+# `fly deploy`; update `app` below to match whatever name Fly assigns.
+app = "addmin-marketing"
+primary_region = "sin"
+
+[build]
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256

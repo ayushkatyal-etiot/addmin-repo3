@@ -1,0 +1,39 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+
+const posts = (await getCollection("blog")).sort(
+  (a, b) => b.data.publishDate.valueOf() - a.data.publishDate.valueOf(),
+);
+---
+
+<BaseLayout
+  title="Blog"
+  description="Articles on the problems AddMin solves — utility bill tracking, lease renewals, and vendor AMC management."
+>
+  <section class="hero container">
+    <span class="eyebrow">Blog</span>
+    <h1>Notes on running more than one office without losing track</h1>
+  </section>
+
+  <section class="section">
+    <div class="container" style="max-width: 42rem;">
+      <h2 class="visually-hidden">Posts</h2>
+      {
+        posts.length === 0 ? (
+          <p class="muted text-center">Nothing published yet — check back soon.</p>
+        ) : (
+          posts.map((post) => (
+            <div class="blog-list-item">
+              <a href={`/blog/${post.id}`}>
+                <h3>{post.data.title}</h3>
+                <p class="blog-meta">{post.data.publishDate.toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</p>
+                <p class="muted">{post.data.description}</p>
+              </a>
+            </div>
+          ))
+        )
+      }
+    </div>
+  </section>
+</BaseLayout>

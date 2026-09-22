@@ -1,0 +1,74 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+const APP_URL = import.meta.env.PUBLIC_APP_URL ?? "https://app.addmin.example";
+
+const personas = [
+  {
+    title: "Admin & Facilities",
+    subtitle: "You're the one who finds out first when something's been missed.",
+    points: [
+      "One checklist per office instead of a different spreadsheet for each one",
+      "A bill or renewal flagged before it's due, not after a vendor calls",
+      "Every office's setup and status visible in one place, even the ones you don't visit often",
+    ],
+  },
+  {
+    title: "Finance",
+    subtitle: "You want to know what's being paid, by whom, before it happens.",
+    points: [
+      "Nothing gets paid without going through approval first",
+      "The person who raises a bill is never the person who approves it",
+      "Payment Authorizers work within a configured limit, so large payments always get a second look",
+    ],
+  },
+  {
+    title: "CXO / Senior Management",
+    subtitle: "You want one view of risk and spend across every office, not five separate reports.",
+    points: [
+      "A single dashboard showing spend, overdue items, upcoming renewals, and compliance gaps across the company",
+      "Every number links back to the real record behind it — nothing is a guess",
+      "Compliance risk (an expired licence, a lapsed certificate) is visible before it becomes a legal problem",
+    ],
+  },
+];
+---
+
+<BaseLayout
+  title="Who it's for"
+  description="AddMin gives Admin & Facilities, Finance, and Senior Management each a reason to trust the same system."
+>
+  <section class="hero container">
+    <span class="eyebrow">Who it's for</span>
+    <h1>Built for the whole team that touches an office's obligations</h1>
+    <p class="lede">Three roles, three different reasons to care — one system underneath all of them.</p>
+  </section>
+
+  <section class="section">
+    <div class="container grid grid-3">
+      {
+        personas.map((persona) => (
+          <div class="persona-card">
+            <h2 style="font-size: 1.25rem;">{persona.title}</h2>
+            <p class="muted" style="font-style: italic;">{persona.subtitle}</p>
+            <ul style="padding-left: 1.1rem; margin-top: 1rem;">
+              {persona.points.map((point) => (
+                <li style="margin-bottom: 0.5rem;">{point}</li>
+              ))}
+            </ul>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="section section-soft text-center">
+    <div class="container">
+      <h2>Find out if it fits your team</h2>
+      <div class="hero-actions">
+        <a href={`${APP_URL}/signup`} class="btn btn-primary">Start Free Trial</a>
+        <a href="/contact" class="btn-link" style="align-self: center;">Book a Demo</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>

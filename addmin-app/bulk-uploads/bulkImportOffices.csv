@@ -1,0 +1,5 @@
+name,address,office_type,ownership_type,code
+Mumbai Branch,42 Marine Drive Mumbai Maharashtra,branch,rented,DEMO-MUM-01
+Bengaluru Regional Hub,88 MG Road Bengaluru Karnataka,regional,owned,DEMO-BLR-01
+Pune Warehouse,Plot 7 Hinjewadi Phase 2 Pune,warehouse,rented,DEMO-PUN-WH
+Hyderabad Sales Office,3rd Floor Cyber Towers Hyderabad,branch,rented,

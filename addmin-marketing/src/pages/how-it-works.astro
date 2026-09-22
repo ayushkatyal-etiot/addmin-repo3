@@ -1,0 +1,73 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+const APP_URL = import.meta.env.PUBLIC_APP_URL ?? "https://app.addmin.example";
+
+const steps = [
+  {
+    title: "1. Set up your office with a guided checklist",
+    body: "When you add an office, AddMin walks you through it: is it owned or rented, which utilities does it have, what licences apply, which vendors service it. You mark each item as available, missing, or not applicable — nothing generic, nothing left to guess at.",
+  },
+  {
+    title: "2. See exactly what's left to do",
+    body: "A setup-completion percentage shows how much of the checklist is done. Anything marked \"missing\" stays visibly open until someone resolves it — it doesn't quietly disappear.",
+  },
+  {
+    title: "3. AddMin starts tracking obligations automatically",
+    body: "The moment you add a utility connection or a lease, AddMin creates a recurring schedule for it — a bill or renewal that's expected on a certain date. You don't have to remember to check; AddMin already knows it's coming.",
+  },
+  {
+    title: "4. A bill shows up before it's late",
+    body: "As a due date approaches, the obligation moves from \"expected\" to visible on your office dashboard. If nothing is recorded against it by the time it's due, it's flagged as missing — so it gets caught before the vendor calls about a disconnection, not after.",
+  },
+  {
+    title: "5. The right person signs off before anything is paid",
+    body: "A bill goes through approval before payment — the person who raised it isn't the person who approves it. A Payment Authorizer can only approve up to their configured limit, so Finance always has visibility into who paid what, and why.",
+  },
+  {
+    title: "6. Renewals and licences get flagged in advance",
+    body: "Lease renewals, AMC contracts, and compliance certificates all get reminders ahead of their expiry — not on the day they lapse. An unresolved expired certificate escalates to the Office Head automatically.",
+  },
+  {
+    title: "7. See it all in one place, or across every office",
+    body: "Office Home shows one office's obligations, overdue items, and upcoming renewals. The executive dashboard rolls all of that up across every office you run — spend, risk, and what needs attention, in one view.",
+  },
+];
+---
+
+<BaseLayout
+  title="How it works"
+  description="A walkthrough of how AddMin's guided office setup and obligation tracking catches a missed bill before it's late."
+>
+  <section class="hero container">
+    <span class="eyebrow">How it works</span>
+    <h1>From a new office to nothing falling through the cracks</h1>
+    <p class="lede" style="max-width: 42rem; margin: 0 auto;">
+      Here's the day-to-day experience — how an admin sets up an office, and how a missed bill gets caught before
+      it's late.
+    </p>
+  </section>
+
+  <section class="section">
+    <div class="container" style="max-width: 46rem;">
+      {
+        steps.map((step) => (
+          <div style="margin-bottom: 2.5rem;">
+            <h2 style="font-size: 1.35rem;">{step.title}</h2>
+            <p class="muted">{step.body}</p>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="section section-soft text-center">
+    <div class="container">
+      <h2>See it running on your own office</h2>
+      <div class="hero-actions">
+        <a href={`${APP_URL}/signup`} class="btn btn-primary">Start Free Trial</a>
+        <a href="/contact" class="btn-link" style="align-self: center;">Book a Demo</a>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
